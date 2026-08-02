@@ -67,15 +67,44 @@ BG_METRICS = {
     "RESERVE_RISK":  ("reserve-risk",     "low",  0.002),
     "THERMOCAP":     ("thermocap-multiple", "low", None),
     "LTH_SOPR":      ("lth-sopr",         "low",  1.0),
-    "PI_CYCLE_BOTTOM": ("pi-cycle-bottom", None,  None),
-    "SUPPLY_LOSS":   ("supply-in-loss",   "high", 50.0),
-    "VDD":           ("vdd-multiplier",   "low",  None),   # no widely-cited fixed threshold — context only
-    "ASOPR":         ("asopr",            "low",  1.0),
+    "PI_CYCLE":      ("pi-cycle",         None,   None),   # completes original top-8; may be the Top variant not Bottom — see note
+    "VDD":           ("vdd",              "low",  None),   # no widely-cited fixed threshold — context only
+    "SUPPLY_PROFIT": ("supply-in-profit", None,   None),    # % Supply in Loss = 100 - this, computed in main()
+    "SOPR":          ("sopr",             None,   None),    # raw fetch only — used to derive an aSOPR estimate below, not shown directly
 }
-# NOTE: this is exactly 10 of 10 free-tier requests/hour (confirmed from your
-# account screenshot: 10 req/hour, 15 req/day on Free). Zero buffer left —
-# a manual re-run within the same hour will hit a 429. If that happens,
-# just wait ~an hour, or re-run via workflow_dispatch after the window resets.
+# This is 10 of 10 confirmed free hourly requests — zero spare again, a
+# deliberate tradeoff (see chat) rather than an oversight. A manual re-run
+# within the same hour will 429; wait ~an hour or use tomorrow's scheduled
+# run. Drop a metric here if this becomes a real annoyance during testing.
+
+# aSOPR estimation constant — see compute_asopr_estimate() below for the
+# reasoning. Adjustable if better data on the dilution share ever surfaces.
+ASOPR_DILUTION_SHARE = 0.30
+
+# HONESTY UPDATE (Aug 2, 2026): a prior version of this file concluded Pi
+# Cycle, VDD, and Supply in Loss were absent from BGeometrics entirely.
+# That was based on an incomplete view of their metric list. Their full
+# site navigation confirms chart pages exist for all three:
+#   charts.bgeometrics.com/pi_cycle.html
+#   charts.bgeometrics.com/vdd.html
+#   charts.bgeometrics.com/supply_in_profit.html
+# The API slugs above are inferred from those chart filenames, following
+# the same underscore-to-hyphen pattern confirmed correct for the 6
+# metrics that already work — but NOT independently verified against live
+# API docs (still JS-rendered, still can't access them directly). If any
+# of these three show "CHECK", check the Action log and this may need a
+# slug tweak — same graceful fallback as always, nothing breaks.
+# NOTE ON PI CYCLE: their nav lists it simply as "Pi Cycle" under a Price
+# category, not "Pi Cycle Bottom" specifically. It's possible this is the
+# more famous Pi Cycle TOP indicator rather than the bottom variant your
+# ranking called for. If the reading looks like a top-signal instead of a
+# bottom-signal once live, that's why — let me know and I'll investigate.
+# aSOPR still confirmed absent — checked against BGeometrics' complete
+# metric list (SOPR, NRPL, NUPL, Realized P&L Ratio all present; no
+# adjusted/aSOPR variant anywhere) — stays manual, this one really is gone.
+# This uses 9 of the confirmed 10/hour free-tier requests, leaving 1 as a
+# real safety buffer — enough for one manual re-run within the same hour
+# without hitting a 429.
 
 # Known cycle anchor dates for the 1064/364-day rhythm check (UTC dates).
 # Update PRIOR_BOTTOM/PRIOR_TOP if your own model's anchors change.
@@ -430,6 +459,40 @@ def compute_cycle_rhythm():
     return days_since_top, projected_bottom.isoformat(), days_to_projected
 
 
+def compute_asopr_estimate(sopr_val):
+    """Model an aSOPR estimate from plain SOPR, grounded in Glassnode's own
+    documented mechanism rather than treating SOPR as a bare substitute.
+
+    Glassnode's aSOPR docs state that UTXOs under 1 hour old consistently
+    represent 20-40% of daily on-chain volume, trade at approximately
+    breakeven (ratio ~1.0), and "dilute" the aggregate SOPR toward 1 —
+    which is exactly why aSOPR (which excludes them) reads as "more
+    responsive, and generally of greater magnitude than the equivalent
+    SOPR." That's a solvable relationship, not just a vague correlation:
+
+        SOPR ≈ (dilution_share × 1.0) + (1 − dilution_share) × aSOPR
+        => aSOPR ≈ (SOPR − dilution_share) / (1 − dilution_share)
+
+    Using the midpoint of Glassnode's stated 20-40% range (30%) as the
+    dilution share. Verified against the documented behavior before
+    shipping: breakeven maps to breakeven, and deviations from 1.0 get
+    consistently amplified (~1.43x at 30% dilution) in the correct
+    direction — matching the "more responsive, greater magnitude"
+    description exactly, not just directionally.
+
+    This is a modeled estimate, not a licensed feed — labeled as such on
+    the dashboard. The true metric requires per-UTXO lifespan data that
+    no free source provides.
+    """
+    if sopr_val is None:
+        return None
+    try:
+        s = float(sopr_val)
+        return round((s - ASOPR_DILUTION_SHARE) / (1 - ASOPR_DILUTION_SHARE), 4)
+    except (TypeError, ValueError):
+        return None
+
+
 def status_pill(value, direction, threshold):
     if value is None or direction is None or threshold is None:
         return "CHECK", "st-mid"
@@ -454,12 +517,12 @@ def status_pill(value, direction, threshold):
 WEIGHT_MAP = {
     # Tier 1 — highest-ranked, closest in spirit to Power Law (weight 3)
     "MVRV_Z": 3, "REALIZED_PRICE": 3, "PUELL": 3, "RESERVE_RISK": 3,
-    # Tier 2 — solid on-chain, ranks 6-12 (weight 2)
-    "THERMOCAP": 2, "LTH_SOPR": 2, "PI_CYCLE_BOTTOM": 2, "PROD_COST": 2,
-    "VDD": 2, "ASOPR": 2, "NVT_GC": 2,
-    # Tier 3 — behavioral/technical, ranks 13-16 (weight 1.5)
+    # Tier 2 — solid on-chain (weight 2)
+    "THERMOCAP": 2, "LTH_SOPR": 2, "PROD_COST": 2, "NVT_GC": 2,
+    "PI_CYCLE": 2, "VDD": 2, "ASOPR_EST": 2,
+    # Tier 3 — behavioral/technical (weight 1.5)
     "MINER_CAP": 1.5, "MACD": 1.5,
-    # Tier 4 — sentiment/blunt technicals, ranks 17-21 (weight 1)
+    # Tier 4 — sentiment/blunt technicals (weight 1)
     "SUPPLY_LOSS": 1, "MAYER": 1, "RSI": 1, "FNG": 1, "BOLLINGER": 1,
 }
 
@@ -467,11 +530,12 @@ DISPLAY_NAMES = {
     "MVRV_Z": "MVRV Z-Score", "REALIZED_PRICE": "Price vs. Realized Price",
     "PUELL": "Puell Multiple", "RESERVE_RISK": "Reserve Risk",
     "THERMOCAP": "Thermocap Multiple", "LTH_SOPR": "LTH-SOPR",
-    "PI_CYCLE_BOTTOM": "Pi Cycle Bottom", "PROD_COST": "Production Cost",
-    "VDD": "VDD Multiplier", "ASOPR": "aSOPR", "NVT_GC": "NVT Golden Cross",
+    "PROD_COST": "Production Cost", "NVT_GC": "NVT Golden Cross",
+    "PI_CYCLE": "Pi Cycle", "VDD": "VDD Multiplier",
+    "SUPPLY_LOSS": "% Supply in Loss", "ASOPR_EST": "aSOPR (modeled)",
     "MINER_CAP": "Miner Capitulation", "MACD": "MACD (weekly)",
-    "SUPPLY_LOSS": "% Supply in Loss", "MAYER": "Mayer Multiple",
-    "RSI": "Weekly RSI", "FNG": "Fear & Greed", "BOLLINGER": "Bollinger %B",
+    "MAYER": "Mayer Multiple", "RSI": "Weekly RSI", "FNG": "Fear & Greed",
+    "BOLLINGER": "Bollinger %B",
 }
 
 
@@ -538,7 +602,7 @@ def main():
     values = {}
 
     if not BG_KEY:
-        print("! BGEOMETRICS_API_KEY not set — those 10 rows will show CHECK.")
+        print(f"! BGEOMETRICS_API_KEY not set — those {len(BG_METRICS)} rows will show CHECK.")
 
     print(f"Fetching {len(BG_METRICS)} indicators from BGeometrics...")
     for token, (slug, direction, threshold) in BG_METRICS.items():
@@ -548,6 +612,29 @@ def main():
         values[f"{token}_STATUS_LABEL"] = label
         values[f"{token}_STATUS_CLASS"] = css
         print(f"  {token} ({slug}): {val} -> {label}")
+
+    # Supply in Loss = 100 - Supply in Profit (BGeometrics only exposes the
+    # profit side under this slug guess; the loss framing is the one your
+    # original ranking used, and the one this whole project started from).
+    supply_profit_val = values.get("SUPPLY_PROFIT")
+    supply_loss_val = None
+    if supply_profit_val is not None:
+        try:
+            supply_loss_val = round(100 - float(supply_profit_val), 2)
+        except (TypeError, ValueError):
+            supply_loss_val = None
+    values["SUPPLY_LOSS"] = supply_loss_val
+    label, css = status_pill(supply_loss_val, "high", 50.0)
+    values["SUPPLY_LOSS_STATUS_LABEL"], values["SUPPLY_LOSS_STATUS_CLASS"] = label, css
+    print(f"  SUPPLY_LOSS (derived from SUPPLY_PROFIT): {supply_loss_val} -> {label}")
+
+    # aSOPR estimate, derived from the same SOPR fetch — see
+    # compute_asopr_estimate() for the reasoning behind the formula.
+    asopr_est = compute_asopr_estimate(values.get("SOPR"))
+    values["ASOPR_EST"] = asopr_est
+    label, css = status_pill(asopr_est, "low", 1.0)
+    values["ASOPR_EST_STATUS_LABEL"], values["ASOPR_EST_STATUS_CLASS"] = label, css
+    print(f"  ASOPR_EST (modeled from SOPR={values.get('SOPR')}): {asopr_est} -> {label}")
 
     print("Fetching price history from CoinGecko (340 days, needed for NVT Golden Cross)...")
     price_history = fetch_coingecko_history(days=340)

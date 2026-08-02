@@ -78,8 +78,8 @@
   <div class="section">
     <div class="section-head">
       <span class="section-num">LIVE</span>
-      <span class="section-title">Your mandated top 8, plus 2 more <span class="live-badge">BGEOMETRICS · FREE TIER</span></span>
-      <span class="section-desc">Uses all 10 of the confirmed 10/hour free quota — zero spare, so a manual re-run within the same hour will 429</span>
+      <span class="section-title">10 live indicators <span class="live-badge">BGEOMETRICS · FREE TIER</span></span>
+      <span class="section-desc">Uses all 10 of the confirmed 10/hour free quota — 0 spare, a deliberate tradeoff (see README)</span>
     </div>
     <table>
       <thead><tr><th style="width:22%">Indicator</th><th style="width:38%">What it measures</th><th style="width:15%">Reading</th><th style="width:15%">Status</th><th style="width:10%">Chart</th></tr></thead>
@@ -90,10 +90,10 @@
         <tr><td class="ind-name">Reserve Risk</td><td class="desc">Price relative to long-term holder conviction</td><td class="reading">{{RESERVE_RISK}}</td><td><span class="status-pill {{RESERVE_RISK_STATUS_CLASS}}">{{RESERVE_RISK_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/reserve_risk.html" target="_blank">view</a></td></tr>
         <tr><td class="ind-name">Thermocap Multiple</td><td class="desc">Market cap vs. cumulative miner revenue ever paid</td><td class="reading">{{THERMOCAP}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
         <tr><td class="ind-name">LTH-SOPR</td><td class="desc">Long-term holders spending at profit (&gt;1) or loss (&lt;1)</td><td class="reading">{{LTH_SOPR}}</td><td><span class="status-pill {{LTH_SOPR_STATUS_CLASS}}">{{LTH_SOPR_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">Pi Cycle Bottom Indicator</td><td class="desc">Long-term moving-average crossover cycle marker</td><td class="reading">{{PI_CYCLE_BOTTOM}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">% Supply in Loss</td><td class="desc">Share of circulating BTC below cost basis</td><td class="reading">{{SUPPLY_LOSS}}%</td><td><span class="status-pill {{SUPPLY_LOSS_STATUS_CLASS}}">{{SUPPLY_LOSS_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">VDD Multiplier</td><td class="desc">Value-weighted coin-days destroyed, smoothed</td><td class="reading">{{VDD}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">aSOPR</td><td class="desc">SOPR with sub-1-hour coin movement stripped out (removes exchange noise)</td><td class="reading">{{ASOPR}}</td><td><span class="status-pill {{ASOPR_STATUS_CLASS}}">{{ASOPR_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
+        <tr><td class="ind-name">Pi Cycle <span style="color:var(--text-faint)">(may be Top, not Bottom variant)</span></td><td class="desc">Long-term moving-average crossover cycle marker</td><td class="reading">{{PI_CYCLE}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/pi_cycle.html" target="_blank">view</a></td></tr>
+        <tr><td class="ind-name">VDD Multiplier</td><td class="desc">Value-weighted coin-days destroyed, smoothed</td><td class="reading">{{VDD}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/vdd.html" target="_blank">view</a></td></tr>
+        <tr><td class="ind-name">% Supply in Loss <span style="color:var(--text-faint)">(derived: 100 − Supply in Profit)</span></td><td class="desc">Share of circulating BTC below cost basis — the metric this whole project started from</td><td class="reading">{{SUPPLY_LOSS}}%</td><td><span class="status-pill {{SUPPLY_LOSS_STATUS_CLASS}}">{{SUPPLY_LOSS_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/supply_in_profit.html" target="_blank">view</a></td></tr>
+        <tr><td class="ind-name">aSOPR <span style="color:var(--text-faint)">(modeled estimate, not licensed)</span></td><td class="desc">SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode's own documented mechanism, not a raw substitute</td><td class="reading">{{ASOPR_EST}}</td><td><span class="status-pill {{ASOPR_EST_STATUS_CLASS}}">{{ASOPR_EST_STATUS_LABEL}}</span></td><td class="ind-source">formula, see README</td></tr>
       </tbody>
     </table>
   </div>
@@ -154,13 +154,12 @@
   <div class="section">
     <div class="section-head">
       <span class="section-num">MANUAL</span>
-      <span class="section-title">No free source found — check &amp; update by hand</span>
-      <span class="section-desc">Down to 2 — these require UTXO-age-cohort or exchange-flow data with no free feed found</span>
+      <span class="section-title">No free source, and no reasonable proxy either</span>
+      <span class="section-desc">Down to 1 — aSOPR now has a modeled estimate above; this is the last true gap</span>
     </div>
     <table>
       <thead><tr><th style="width:22%">Indicator</th><th style="width:48%">Where to check</th><th style="width:30%">Reading</th></tr></thead>
       <tbody>
-        <tr><td class="ind-name">Realized Cap HODL Waves</td><td class="ind-source"><a href="https://www.lookintobitcoin.com/charts/realized-cap-hodl-waves/" target="_blank">LookIntoBitcoin</a></td><td class="reading">manual</td></tr>
         <tr><td class="ind-name">Whale accumulation / exchange netflow</td><td class="ind-source"><a href="https://cryptoquant.com" target="_blank">CryptoQuant free tier</a></td><td class="reading">manual</td></tr>
       </tbody>
     </table>
