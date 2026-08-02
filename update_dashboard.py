@@ -96,24 +96,49 @@ def _get_json(url, headers=None, timeout=15):
 # 1. BGeometrics — 8 calls, safely under the 8/hour free cap
 # ---------------------------------------------------------------------------
 def fetch_bg_latest(slug):
+    """Fetch and unwrap the latest value for one metric.
+
+    Confirmed real response shape (per your live dashboard, Aug 2, 2026):
+        [{"d": "2026-08-01", "unixTs": 1785542400, "mvrvZscore": 0.3471}]
+    i.e. a list containing one dict, where the actual metric lives under a
+    camelCase key that varies per indicator (mvrvZscore, realizedPrice,
+    puellMultiple, etc.) alongside metadata keys (d, unixTs). This pulls
+    the first value that isn't one of the known metadata keys, so it works
+    regardless of the exact field name for any given metric.
+    """
     url = f"{BG_BASE}/{slug}"
+    METADATA_KEYS = {"d", "date", "unixts", "unix_ts", "timestamp", "time"}
     try:
         data = _get_json(url, headers={
             "User-Agent": "btc-dashboard-bot/1.0",
             "Authorization": f"Bearer {BG_KEY}",
         })
-        if isinstance(data, dict):
+
+        entry = None
+        if isinstance(data, list) and data:
+            last = data[-1]
+            if isinstance(last, dict):
+                entry = last
+            else:
+                return last  # bare value at the end of a plain list
+        elif isinstance(data, dict):
             if "value" in data:
                 return data["value"]
             d = data.get("data")
             if isinstance(d, list) and d:
                 last = d[-1]
-                return last[-1] if isinstance(last, list) else last
-            if isinstance(d, dict) and "value" in d:
-                return d["value"]
-        if isinstance(data, list) and data:
-            last = data[-1]
-            return last[-1] if isinstance(last, list) else last
+                entry = last if isinstance(last, dict) else None
+                if entry is None:
+                    return last
+            elif isinstance(d, dict):
+                entry = d
+            else:
+                entry = data  # the top-level dict itself may be the entry
+
+        if entry:
+            for key, val in entry.items():
+                if key.lower() not in METADATA_KEYS:
+                    return val
     except urllib.error.HTTPError as e:
         print(f"  ! {slug}: HTTP {e.code} — {e.reason}")
     except Exception as e:
