@@ -11,6 +11,13 @@ permissions:
   pages: write
   id-token: write
 
+# Prevents two runs (e.g. a scheduled one and a manual workflow_dispatch)
+# from executing at the same time and racing to push. Any run that starts
+# while another is still going waits in queue instead of colliding.
+concurrency:
+  group: update-dashboard
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -30,11 +37,51 @@ jobs:
 
       - name: Commit updated dashboard
         run: |
+          set -e
           git config user.name "btc-dashboard-bot"
           git config user.email "actions@users.noreply.github.com"
+
           git add dashboard.html
-          git diff --quiet --cached || git commit -m "Auto-update dashboard $(date -u +%Y-%m-%d)"
-          git push
+          if git diff --quiet --cached; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          max_attempts=5
+          attempt=1
+          while true; do
+            git commit -m "Auto-update dashboard $(date -u +%Y-%m-%d)"
+
+            if git push; then
+              echo "Push succeeded."
+              break
+            fi
+
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::git push failed after $max_attempts attempts."
+              exit 1
+            fi
+
+            echo "Push rejected (attempt $attempt/$max_attempts) - fetching and resyncing with remote..."
+            git fetch origin master
+
+            # Undo just the local commit (keep dashboard.html's changes staged)
+            # and move our branch pointer up to the latest remote tip, then
+            # loop back around to recommit on top of it. Deliberately NOT
+            # using `git pull --rebase`: a non-interactive rebase can drop a
+            # commit silently on conflict, whereas this reset+recommit makes
+            # the update explicit and idempotent every time.
+            git reset --soft origin/master
+            git add dashboard.html
+
+            if git diff --quiet --cached; then
+              echo "Remote already has this dashboard content; nothing left to push."
+              exit 0
+            fi
+
+            attempt=$((attempt + 1))
+            sleep $((RANDOM % 8 + 4))
+          done
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
