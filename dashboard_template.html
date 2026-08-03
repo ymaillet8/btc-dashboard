@@ -91,7 +91,7 @@
         <tr><td class="ind-name">Thermocap Multiple</td><td class="desc">Market cap vs. cumulative miner revenue ever paid</td><td class="reading">{{THERMOCAP}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
         <tr><td class="ind-name">LTH-SOPR</td><td class="desc">Long-term holders spending at profit (&gt;1) or loss (&lt;1)</td><td class="reading">{{LTH_SOPR}}</td><td><span class="status-pill {{LTH_SOPR_STATUS_CLASS}}">{{LTH_SOPR_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
         <tr><td class="ind-name">Pi Cycle <span style="color:var(--text-faint)">(may be Top, not Bottom variant)</span></td><td class="desc">Long-term moving-average crossover cycle marker</td><td class="reading">{{PI_CYCLE}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/pi_cycle.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">VDD Multiplier</td><td class="desc">Value-weighted coin-days destroyed, smoothed</td><td class="reading">{{VDD}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/vdd.html" target="_blank">view</a></td></tr>
+        <tr><td class="ind-name">NRPL <span style="color:var(--text-faint)">(Net Realized P&amp;L, BTC)</span></td><td class="desc">Realized profit minus realized loss, in BTC — deeply negative means capitulation dominates. The confirmation signal your uploaded research recommends watching (2022's bottom flushed ~1.2M BTC in realized losses)</td><td class="reading">{{NRPL}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/" target="_blank">view</a></td></tr>
         <tr><td class="ind-name">% Supply in Loss <span style="color:var(--text-faint)">(derived: 100 − Supply in Profit)</span></td><td class="desc">Share of circulating BTC below cost basis — the metric this whole project started from</td><td class="reading">{{SUPPLY_LOSS}}%</td><td><span class="status-pill {{SUPPLY_LOSS_STATUS_CLASS}}">{{SUPPLY_LOSS_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/supply_in_profit.html" target="_blank">view</a></td></tr>
         <tr><td class="ind-name">aSOPR <span style="color:var(--text-faint)">(modeled estimate, not licensed)</span></td><td class="desc">SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode's own documented mechanism, not a raw substitute</td><td class="reading">{{ASOPR_EST}}</td><td><span class="status-pill {{ASOPR_EST_STATUS_CLASS}}">{{ASOPR_EST_STATUS_LABEL}}</span></td><td class="ind-source">formula, see README</td></tr>
       </tbody>
@@ -119,6 +119,58 @@
         <tr><td class="ind-name">Bollinger %B <span style="color:var(--text-faint)">(20-week, 2σ)</span></td><td class="desc">Where price sits within its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal</td><td class="reading">{{BOLLINGER}}</td><td><span class="status-pill {{BOLLINGER_STATUS_CLASS}}">{{BOLLINGER_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
       </tbody>
     </table>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">LIVE</span>
+      <span class="section-title">Prediction market — Polymarket <span class="live-badge">GAMMA API · FREE, KEYLESS</span></span>
+      <span class="section-desc">Crowd probability, not a forecast — not scored in the verdict below, see the note underneath</span>
+    </div>
+    <table>
+      <thead><tr><th style="width:14%">Horizon</th><th style="width:38%">Market question</th><th style="width:16%">Yes odds</th><th style="width:14%">Resolves</th><th style="width:18%">Volume</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="ind-name">Weekly<br><span style="color:var(--text-faint)">(~7 days)</span></td>
+          <td class="desc">{{POLY_WEEKLY_QUESTION}}</td>
+          <td class="reading">{{POLY_WEEKLY_YES_LABEL}}: {{POLY_WEEKLY_YES_PCT}}%</td>
+          <td class="reading">{{POLY_WEEKLY_DATE}}</td>
+          <td class="reading">${{POLY_WEEKLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Bi-weekly<br><span style="color:var(--text-faint)">(~14 days)</span></td>
+          <td class="desc">{{POLY_BIWEEKLY_QUESTION}}</td>
+          <td class="reading">{{POLY_BIWEEKLY_YES_LABEL}}: {{POLY_BIWEEKLY_YES_PCT}}%</td>
+          <td class="reading">{{POLY_BIWEEKLY_DATE}}</td>
+          <td class="reading">${{POLY_BIWEEKLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Monthly<br><span style="color:var(--text-faint)">(~30 days)</span></td>
+          <td class="desc">{{POLY_MONTHLY_QUESTION}}</td>
+          <td class="reading">{{POLY_MONTHLY_YES_LABEL}}: {{POLY_MONTHLY_YES_PCT}}%</td>
+          <td class="reading">{{POLY_MONTHLY_DATE}}</td>
+          <td class="reading">${{POLY_MONTHLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Quarterly<br><span style="color:var(--text-faint)">(~90 days)</span></td>
+          <td class="desc">{{POLY_QUARTERLY_QUESTION}}</td>
+          <td class="reading">{{POLY_QUARTERLY_YES_LABEL}}: {{POLY_QUARTERLY_YES_PCT}}%</td>
+          <td class="reading">{{POLY_QUARTERLY_DATE}}</td>
+          <td class="reading">${{POLY_QUARTERLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Yearly<br><span style="color:var(--text-faint)">(~365 days)</span></td>
+          <td class="desc">{{POLY_YEARLY_QUESTION}}</td>
+          <td class="reading">{{POLY_YEARLY_YES_LABEL}}: {{POLY_YEARLY_YES_PCT}}%</td>
+          <td class="reading">{{POLY_YEARLY_DATE}}</td>
+          <td class="reading">${{POLY_YEARLY_VOLUME}}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="master-note" style="margin-top:14px; padding:0 4px; font-size:12px;">
+      Whichever live BTC market on Polymarket falls closest to each horizon, picked automatically each day — the exact question text varies (a $-threshold, a range, etc.), since Polymarket doesn't offer fixed weekly/monthly contracts. Markets under $25,000 volume are skipped as too illiquid to trust. A "no match" row means no genuinely close BTC market currently exists at that horizon — shown honestly rather than forcing a bad match.
+      <strong style="color:var(--red);">This is a live crowd probability, not a forecast.</strong> Per your own uploaded research: these odds move with price rather than lead it, and have shown real overconfidence when price sits right at the threshold (a 91%-priced "$100k in November" market resolved NO in Nov 2024 when BTC missed by four days). Read as context, not signal.
+    </div>
   </div>
 
   <div class="section">

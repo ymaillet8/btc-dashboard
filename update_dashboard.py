@@ -68,10 +68,23 @@ BG_METRICS = {
     "THERMOCAP":     ("thermocap-multiple", "low", None),
     "LTH_SOPR":      ("lth-sopr",         "low",  1.0),
     "PI_CYCLE":      ("pi-cycle",         None,   None),   # completes original top-8; may be the Top variant not Bottom — see note
-    "VDD":           ("vdd",              "low",  None),   # no widely-cited fixed threshold — context only
+    "NRPL":          ("nrpl-btc",         "low",  None),   # Net Realized P&L in BTC — confirmed-real slug (seen directly in your BGeometrics account's own API usage examples), not a guess like the metric it replaced
     "SUPPLY_PROFIT": ("supply-in-profit", None,   None),    # % Supply in Loss = 100 - this, computed in main()
     "SOPR":          ("sopr",             None,   None),    # raw fetch only — used to derive an aSOPR estimate below, not shown directly
 }
+# v9: swapped VDD (an unconfirmed slug guess that was always context-only
+# anyway) for NRPL-BTC, a metric this whole addition is grounded in: your
+# uploaded forecaster-track-record report specifically recommends "realized-
+# loss magnitude" as a confirmation signal for a genuine bottom (2022 flushed
+# ~1.2M BTC in realized losses; mid-2026 had only ~187k — watch that gap
+# close). NRPL (net realized profit/loss) is the closest confirmed-available
+# proxy: deeply negative NRPL means realized losses are dominating realized
+# profits, i.e. capitulation. It's the net figure, not the pure gross-loss
+# figure the report cites, but it's built from the same underlying data and
+# moves the same direction. No widely-cited fixed "buy" threshold exists for
+# this specific metric, so it stays context-only (displayed, not scored in
+# the verdict tally) rather than inventing a number — same honest treatment
+# as Thermocap.
 # This is 10 of 10 confirmed free hourly requests — zero spare again, a
 # deliberate tradeoff (see chat) rather than an oversight. A manual re-run
 # within the same hour will 429; wait ~an hour or use tomorrow's scheduled
@@ -445,6 +458,159 @@ def fetch_fear_greed():
 
 
 # ---------------------------------------------------------------------------
+# 4b. Polymarket Gamma API — live Bitcoin prediction-market odds, bucketed
+#     into your requested horizons. Free, keyless, a totally separate
+#     service from BGeometrics — zero impact on that 10/hour budget.
+#
+#     Per your uploaded forecaster-track-record report: prediction markets
+#     are "the only source with demonstrated multi-month calibration" for
+#     Bitcoin specifically, but they are NOT a forecast — just the crowd's
+#     current probability, prone to overconfidence right at a threshold.
+#     This section is deliberately NOT scored in the weighted verdict below
+#     — it's shown as its own context section, exactly as the report
+#     recommends using it.
+# ---------------------------------------------------------------------------
+POLYMARKET_BASE = "https://gamma-api.polymarket.com"
+
+# Target horizons in days, and a matching-window tolerance so we don't force
+# a bad match if nothing genuinely close exists for a given bucket.
+HORIZONS = {
+    "WEEKLY":    (7,   4),    # target 7 days, accept anything within +-4
+    "BIWEEKLY":  (14,  5),
+    "MONTHLY":   (30,  10),
+    "QUARTERLY": (90,  25),
+    "YEARLY":    (365, 60),
+}
+MIN_VOLUME_USD = 25_000  # ignore illiquid/noise markets below this
+
+
+def fetch_polymarket_btc_events():
+    """One fetch, sorted by volume, filtered client-side for Bitcoin/BTC
+    markets — the Gamma API has no free-text search (a ?q= param is
+    silently ignored), so this is the correct approach, not a shortcut."""
+    url = f"{POLYMARKET_BASE}/events?active=true&closed=false&limit=300&order=volume&ascending=false"
+    try:
+        data = _get_json(url, headers={"User-Agent": "btc-dashboard-bot/1.0"})
+    except Exception as e:
+        print(f"  ! Polymarket fetch failed: {e}")
+        return []
+
+    if not isinstance(data, list):
+        print("  ! Polymarket returned an unexpected shape, skipping")
+        return []
+
+    btc_events = []
+    for event in data:
+        title = (event.get("title") or event.get("question") or "")
+        slug = event.get("slug") or ""
+        haystack = f"{title} {slug}".lower()
+        if "bitcoin" not in haystack and "btc" not in haystack:
+            continue
+        btc_events.append(event)
+    return btc_events
+
+
+def _parse_json_field(raw):
+    """outcomes/outcomePrices arrive as JSON-encoded STRINGS, not native
+    arrays or lists — a documented Gamma API quirk. Decode defensively."""
+    if raw is None:
+        return None
+    if isinstance(raw, (list, dict)):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _extract_markets(events):
+    """Flatten events -> individual markets, pulling the fields we need and
+    parsing the JSON-string-encoded ones, skipping anything malformed."""
+    markets = []
+    for event in events:
+        for m in event.get("markets", []) or []:
+            question = m.get("question") or event.get("title") or "Untitled market"
+            end_date_str = m.get("endDate") or event.get("endDate")
+            if not end_date_str:
+                continue
+            try:
+                end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+
+            outcomes = _parse_json_field(m.get("outcomes")) or ["Yes", "No"]
+            prices = _parse_json_field(m.get("outcomePrices"))
+            if not prices or len(prices) < 2:
+                continue
+            try:
+                yes_price = float(prices[0])
+            except (TypeError, ValueError):
+                continue
+
+            volume = m.get("volume") or event.get("volume") or 0
+            try:
+                volume = float(volume)
+            except (TypeError, ValueError):
+                volume = 0.0
+            if volume < MIN_VOLUME_USD:
+                continue
+
+            markets.append({
+                "question": question,
+                "yes_label": outcomes[0] if len(outcomes) > 0 else "Yes",
+                "yes_pct": round(yes_price * 100, 1),
+                "end_date": end_date,
+                "volume": volume,
+                "slug": m.get("slug") or event.get("slug") or "",
+            })
+    return markets
+
+
+def build_polymarket_buckets():
+    """For each target horizon, find the BTC market whose expiry is closest
+    to that many days out, within the tolerance window, above the volume
+    floor. Returns a dict of template-ready values — every bucket that has
+    no reasonable match is explicitly None, not a forced bad guess."""
+    events = fetch_polymarket_btc_events()
+    markets = _extract_markets(events)
+    now = datetime.now(timezone.utc)
+
+    result = {}
+    for horizon, (target_days, tolerance) in HORIZONS.items():
+        best = None
+        best_diff = None
+        for m in markets:
+            days_out = (m["end_date"] - now).days
+            if days_out < 0:
+                continue
+            diff = abs(days_out - target_days)
+            if diff > tolerance:
+                continue
+            # Prefer the closest match; break ties by higher volume
+            if best is None or diff < best_diff or (diff == best_diff and m["volume"] > best["volume"]):
+                best = m
+                best_diff = diff
+
+        prefix = f"POLY_{horizon}"
+        if best:
+            result[f"{prefix}_QUESTION"] = best["question"]
+            result[f"{prefix}_YES_LABEL"] = best["yes_label"]
+            result[f"{prefix}_YES_PCT"] = best["yes_pct"]
+            result[f"{prefix}_DATE"] = best["end_date"].strftime("%Y-%m-%d")
+            result[f"{prefix}_VOLUME"] = f"{best['volume']:,.0f}"
+            result[f"{prefix}_FOUND"] = True
+        else:
+            result[f"{prefix}_QUESTION"] = "No liquid BTC market found near this horizon"
+            result[f"{prefix}_YES_LABEL"] = "—"
+            result[f"{prefix}_YES_PCT"] = "—"
+            result[f"{prefix}_DATE"] = "—"
+            result[f"{prefix}_VOLUME"] = "—"
+            result[f"{prefix}_FOUND"] = False
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # 5. Cycle rhythm — pure calendar math, no API
 # ---------------------------------------------------------------------------
 def compute_cycle_rhythm():
@@ -519,7 +685,7 @@ WEIGHT_MAP = {
     "MVRV_Z": 3, "REALIZED_PRICE": 3, "PUELL": 3, "RESERVE_RISK": 3,
     # Tier 2 — solid on-chain (weight 2)
     "THERMOCAP": 2, "LTH_SOPR": 2, "PROD_COST": 2, "NVT_GC": 2,
-    "PI_CYCLE": 2, "VDD": 2, "ASOPR_EST": 2,
+    "PI_CYCLE": 2, "ASOPR_EST": 2,
     # Tier 3 — behavioral/technical (weight 1.5)
     "MINER_CAP": 1.5, "MACD": 1.5,
     # Tier 4 — sentiment/blunt technicals (weight 1)
@@ -531,7 +697,7 @@ DISPLAY_NAMES = {
     "PUELL": "Puell Multiple", "RESERVE_RISK": "Reserve Risk",
     "THERMOCAP": "Thermocap Multiple", "LTH_SOPR": "LTH-SOPR",
     "PROD_COST": "Production Cost", "NVT_GC": "NVT Golden Cross",
-    "PI_CYCLE": "Pi Cycle", "VDD": "VDD Multiplier",
+    "PI_CYCLE": "Pi Cycle", "NRPL": "NRPL (Net Realized P&L)",
     "SUPPLY_LOSS": "% Supply in Loss", "ASOPR_EST": "aSOPR (modeled)",
     "MINER_CAP": "Miner Capitulation", "MACD": "MACD (weekly)",
     "MAYER": "Mayer Multiple", "RSI": "Weekly RSI", "FNG": "Fear & Greed",
@@ -725,6 +891,14 @@ def main():
     label, css = status_pill(fng_val, "low", 20.0)
     values["FNG_STATUS_LABEL"], values["FNG_STATUS_CLASS"] = label, css
     print(f"  Fear & Greed: {fng_val} ({fng_label})")
+
+    print("Fetching Polymarket Bitcoin prediction markets (weekly/biweekly/monthly/quarterly/yearly)...")
+    poly_values = build_polymarket_buckets()
+    values.update(poly_values)
+    for horizon in HORIZONS:
+        found = poly_values.get(f"POLY_{horizon}_FOUND")
+        pct = poly_values.get(f"POLY_{horizon}_YES_PCT")
+        print(f"  {horizon}: {'found' if found else 'no match in window'} -> {pct}")
 
     print("Computing cycle rhythm...")
     days_since_top, projected_bottom, days_to_projected = compute_cycle_rhythm()
