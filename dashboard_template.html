@@ -102,6 +102,28 @@
   .st-buy{background:var(--green-dim); color:var(--green);}
   .st-no{background:var(--red-dim); color:var(--red);}
   .st-mid{background:var(--amber-dim); color:var(--amber);}
+  .st-near{background:rgba(107,169,250,.14); color:var(--blue); border:1px solid rgba(107,169,250,.3);}
+
+  /* --- Signal summary box --- */
+  .summary-box{
+    border:1px solid var(--border); border-radius:12px; background:var(--panel);
+    padding:22px 26px; margin-top:20px;
+  }
+  .summary-row{display:flex; flex-wrap:wrap; gap:24px; align-items:stretch;}
+  .summary-cell{flex:1 1 160px; text-align:center; padding:6px 10px;}
+  .summary-frac{font-family:var(--mono); font-size:22px; font-weight:700; color:var(--text);}
+  .summary-label{font-size:11.5px; color:var(--text-faint); margin-top:6px; line-height:1.4;}
+  .summary-pct{font-family:var(--mono); font-size:14px; color:var(--text-dim); margin-top:4px;}
+  .summary-cell-main{
+    flex:1.4 1 200px; border-left:1px solid var(--border); padding-left:24px;
+    display:flex; flex-direction:column; justify-content:center;
+  }
+  .summary-pct-main{font-family:var(--mono); font-size:40px; font-weight:700; color:var(--green); line-height:1;}
+  @media (max-width:720px){
+    .summary-cell-main{border-left:none; border-top:1px solid var(--border); padding-left:10px; padding-top:16px;}
+    .summary-pct-main{font-size:32px;}
+  }
+
   .table-source-line{font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:10px;}
 
   /* --- Hover tooltips (CSS-only) --- */
@@ -169,6 +191,8 @@
   </div>
 
   {{STALENESS_BANNER}}
+
+  {{SIGNAL_SUMMARY_BOX}}
 
   <div class="section" style="margin-top:32px;">
     <div class="master">

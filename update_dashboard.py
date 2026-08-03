@@ -173,6 +173,51 @@ def rolling_threshold(cache, key):
         return None, n
     return compute_percentile(values, PERCENTILE_CUTOFF), n
 
+
+# ---------------------------------------------------------------------------
+# "Near-threshold" leeway. Real research behind this, not a guess: the
+# credible sources for exactly this problem (TradingView's own documented
+# Bollinger Bands methodology, an arXiv paper on hysteresis threshold
+# choice) size a tolerance band using the indicator's OWN measured
+# statistical scale — not a flat percentage applied to everything alike
+# (too blunt: a slow-moving indicator and a jumpy one get treated
+# identically), and not a hand-picked band per indicator (too subjective —
+# that's a guess wearing precision as a costume). This uses each
+# indicator's real trailing standard deviation, computed from the same
+# rolling-history cache already built for the percentile thresholds.
+NEAR_STDEV_MIN_DAYS = 20     # fewer points needed than a percentile (MIN_HISTORY_DAYS=90) —
+                             # a standard deviation estimate stabilizes faster than a reliable tail percentile
+NEAR_BAND_STDEV_FRACTION = 0.25   # width of the "near" zone, in units of the indicator's own trailing sigma
+NEAR_BAND_BOOTSTRAP_PCT = 0.03    # provisional flat 3% fallback only until real sigma exists
+
+
+def compute_stdev(values):
+    """Population standard deviation, dependency-free (no numpy)."""
+    if not values or len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    variance = sum((x - mean) ** 2 for x in values) / len(values)
+    return variance ** 0.5
+
+
+def near_threshold_band(cache, token, threshold):
+    """Returns (band_width, source_label) — how far past the threshold a
+    reading can sit and still count as "near." Prefers a real trailing
+    standard deviation once enough history exists; falls back to a small,
+    clearly-labeled flat percentage before then. Returns (None, None) if
+    no defensible band can be computed yet (e.g. a zero threshold with too
+    little history — 3% of zero is meaningless, so no leeway is granted
+    rather than fabricating one)."""
+    hist_key = f"{token}__history"
+    values = cache.get(hist_key, {}).get("values", [])
+    if len(values) >= NEAR_STDEV_MIN_DAYS:
+        sigma = compute_stdev(values)
+        if sigma:
+            return sigma * NEAR_BAND_STDEV_FRACTION, f"\u00b1{NEAR_BAND_STDEV_FRACTION}\u03c3 (n={len(values)})"
+    if threshold not in (0, None):
+        return abs(threshold) * NEAR_BAND_BOOTSTRAP_PCT, "provisional 3%"
+    return None, None
+
 # token -> (endpoint slug [best guess, unverified], direction, threshold)
 BG_METRICS = {
     "MVRV_Z":        ("mvrv-zscore",      "low",  0.0),
@@ -904,17 +949,39 @@ def compute_asopr_estimate(sopr_val):
         return None
 
 
-def status_pill(value, direction, threshold):
+def status_pill(value, direction, threshold, cache=None, token=None):
+    """direction='low': buy-favorable at or below threshold. direction='high':
+    buy-favorable at or above threshold. If cache+token are supplied, also
+    checks near_threshold_band() — a reading just outside the threshold,
+    within that band, still counts as buy-favorable but is labeled and
+    styled distinctly (st-near, not st-buy) so it's never mistaken for a
+    clean, fully-crossed reading. Omit cache/token for the old, exact-only
+    behavior."""
     if value is None or direction is None or threshold is None:
         return "CHECK", "st-mid"
     try:
         v = float(value)
     except (TypeError, ValueError):
         return "CHECK", "st-mid"
+
     if direction == "low":
-        return ("BUY ZONE", "st-buy") if v <= threshold else ("NOT YET", "st-no")
+        if v <= threshold:
+            return "BUY ZONE", "st-buy"
+        if cache is not None and token is not None:
+            band, source = near_threshold_band(cache, token, threshold)
+            if band is not None and v <= threshold + band:
+                return f"NEAR THRESHOLD ({source})", "st-near"
+        return "NOT YET", "st-no"
+
     if direction == "high":
-        return ("ELEVATED", "st-buy") if v >= threshold else ("NORMAL", "st-no")
+        if v >= threshold:
+            return "ELEVATED", "st-buy"
+        if cache is not None and token is not None:
+            band, source = near_threshold_band(cache, token, threshold)
+            if band is not None and v >= threshold - band:
+                return f"NEAR THRESHOLD ({source})", "st-near"
+        return "NORMAL", "st-no"
+
     return "CHECK", "st-mid"
 
 
@@ -1081,6 +1148,8 @@ def build_full_weighted_breakdown(values):
             label = values.get(f"{token}_STATUS_LABEL", "CHECK")
             if css == "st-buy":
                 status_text, status_css = "BUY-FAVORABLE", "st-buy"
+            elif css == "st-near":
+                status_text, status_css = "NEAR-THRESHOLD", "st-near"
             elif css == "st-no":
                 status_text, status_css = "NOT YET", "st-no"
             elif label and label.startswith("STALE"):
@@ -1105,6 +1174,65 @@ def build_full_weighted_breakdown(values):
     return "\n".join(rows)
 
 
+# Matches the two live-indicator table sections in the template exactly —
+# used only for the summary counts below, not for scoring itself.
+CORE_TOKENS = ("MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
+               "LTH_SOPR", "PI_CYCLE", "NRPL", "SUPPLY_LOSS", "ASOPR_EST")
+SELF_COMPUTED_TOKENS = ("PROD_COST", "MAYER", "DRAWDOWN", "MINER_CAP", "NVT_GC",
+                         "FNG", "MACD", "RSI", "BOLLINGER", "CYCLE_RHYTHM")
+
+
+def _count_bucket(values, tokens):
+    """(buy_count, scored_count, pct) for a group of tokens — only counts
+    ones currently carrying real weight (in WEIGHT_MAP), matching the
+    "weighted indicators" framing this box is meant to report on. A
+    near-threshold reading (st-near) counts as buy-favorable here too,
+    same treatment as the main verdict."""
+    scored = [t for t in tokens if t in WEIGHT_MAP]
+    buy = [t for t in scored if values.get(f"{t}_STATUS_CLASS") in ("st-buy", "st-near")]
+    n_scored = len(scored)
+    n_buy = len(buy)
+    pct = round((n_buy / n_scored) * 100, 1) if n_scored else 0.0
+    return n_buy, n_scored, pct
+
+
+def build_signal_summary_html(values):
+    """Three fractions (core / self-computed / all weighted indicators)
+    plus the actual weight-adjusted percentage, in one compact box. The
+    weighted percentage is the one that actually drives the verdict —
+    deliberately shown larger than the three simple counts, which are
+    context, not the headline number."""
+    core_buy, core_total, core_pct = _count_bucket(values, CORE_TOKENS)
+    self_buy, self_total, self_pct = _count_bucket(values, SELF_COMPUTED_TOKENS)
+    all_buy, all_total, all_pct = _count_bucket(values, CORE_TOKENS + SELF_COMPUTED_TOKENS)
+    weighted_pct = values.get("VERDICT_PCT")
+    weighted_pct_display = f"{weighted_pct}%" if weighted_pct is not None else "—"
+
+    return f'''<div class="summary-box">
+      <div class="summary-row">
+        <div class="summary-cell">
+          <div class="summary-frac">{core_buy}/{core_total}</div>
+          <div class="summary-label">Core (§1) signaling bottom</div>
+          <div class="summary-pct">{core_pct}%</div>
+        </div>
+        <div class="summary-cell">
+          <div class="summary-frac">{self_buy}/{self_total}</div>
+          <div class="summary-label">Self-computed (§2) signaling bottom</div>
+          <div class="summary-pct">{self_pct}%</div>
+        </div>
+        <div class="summary-cell">
+          <div class="summary-frac">{all_buy}/{all_total}</div>
+          <div class="summary-label">All weighted indicators signaling bottom</div>
+          <div class="summary-pct">{all_pct}%</div>
+        </div>
+        <div class="summary-cell summary-cell-main">
+          <div class="summary-pct-main">{weighted_pct_display}</div>
+          <div class="summary-label">Actual weighted percentage</div>
+        </div>
+      </div>
+    </div>'''
+
+
 def build_verdict(values):
     scored, excluded_names, buy_names = [], [], []
     for token, weight in WEIGHT_MAP.items():
@@ -1113,6 +1241,12 @@ def build_verdict(values):
         if css == "st-buy":
             scored.append((token, weight, True))
             buy_names.append(name)
+        elif css == "st-near":
+            # Near-threshold leeway: counts as buy-favorable per your own
+            # call, but visibly marked so it's never confused with a
+            # clean, fully-crossed reading.
+            scored.append((token, weight, True))
+            buy_names.append(f"{name} (near-threshold)")
         elif css == "st-no":
             scored.append((token, weight, False))
         else:
@@ -1177,8 +1311,12 @@ def main():
         val = fetch_bg_latest(slug)
         if val is not None:
             cache_store(cache, token, val)
+            try:
+                history_append(cache, token, float(val))
+            except (TypeError, ValueError):
+                pass
             values[token] = val
-            label, css = status_pill(val, direction, threshold)
+            label, css = status_pill(val, direction, threshold, cache=cache, token=token)
         else:
             cached_val, cached_date = cache_lookup(cache, token)
             if cached_val is not None:
@@ -1202,13 +1340,10 @@ def main():
     PERCENTILE_ELIGIBLE = ("THERMOCAP", "NRPL")
     for token in PERCENTILE_ELIGIBLE:
         fresh_val = values.get(token)
-        # Only feed genuinely fresh fetches into the history — a stale
-        # cache-fallback value repeated into the distribution would distort
-        # the percentile calculation with a duplicate, not a new
-        # observation.
-        was_fresh_fetch = not str(values.get(f"{token}_STATUS_LABEL", "")).startswith("STALE")
-        if fresh_val is not None and was_fresh_fetch:
-            history_append(cache, token, fresh_val)
+        # History is already recorded generically in the BG_METRICS loop
+        # above (for every token, on every genuinely fresh fetch) — no
+        # need to append it again here, that would double-count today's
+        # value in the distribution.
 
         threshold, n_points = rolling_threshold(cache, token)
         if threshold is not None and fresh_val is not None:
@@ -1241,7 +1376,9 @@ def main():
         cached_date = values["SUPPLY_PROFIT_STATUS_LABEL"].split("(")[1].rstrip(")")
         label, css = f"STALE ({cached_date})", "st-mid"
     else:
-        label, css = status_pill(supply_loss_val, "high", 50.0)
+        if supply_loss_val is not None:
+            history_append(cache, "SUPPLY_LOSS", supply_loss_val)
+        label, css = status_pill(supply_loss_val, "high", 50.0, cache=cache, token="SUPPLY_LOSS")
     values["SUPPLY_LOSS_STATUS_LABEL"], values["SUPPLY_LOSS_STATUS_CLASS"] = label, css
     values["SUPPLY_LOSS_TARGET"] = target_for("SUPPLY_LOSS")
     print(f"  SUPPLY_LOSS (derived from SUPPLY_PROFIT): {supply_loss_val} -> {label}")
@@ -1256,7 +1393,9 @@ def main():
         cached_date = values["SOPR_STATUS_LABEL"].split("(")[1].rstrip(")")
         label, css = f"STALE ({cached_date})", "st-mid"
     else:
-        label, css = status_pill(asopr_est, "low", 1.0)
+        if asopr_est is not None:
+            history_append(cache, "ASOPR_EST", asopr_est)
+        label, css = status_pill(asopr_est, "low", 1.0, cache=cache, token="ASOPR_EST")
     values["ASOPR_EST_STATUS_LABEL"], values["ASOPR_EST_STATUS_CLASS"] = label, css
     values["ASOPR_EST_TARGET"] = target_for("ASOPR_EST")
     print(f"  ASOPR_EST (modeled from SOPR={values.get('SOPR')}): {asopr_est} -> {label}")
@@ -1297,7 +1436,9 @@ def main():
     mayer, drawdown = compute_mayer_and_drawdown(price_history)
     values["MAYER"] = mayer
     values["DRAWDOWN"] = drawdown
-    label, css = status_pill(mayer, "low", 1.0)
+    if mayer is not None:
+        history_append(cache, "MAYER", mayer)
+    label, css = status_pill(mayer, "low", 1.0, cache=cache, token="MAYER")
     values["MAYER_STATUS_LABEL"], values["MAYER_STATUS_CLASS"] = label, css
     values["MAYER_TARGET"] = target_for("MAYER")
     values["DRAWDOWN_TARGET"] = target_for("DRAWDOWN")
@@ -1306,20 +1447,26 @@ def main():
     print("Computing weekly RSI, MACD, and Bollinger %B from the same price history...")
     rsi = compute_weekly_rsi(price_history)
     values["RSI"] = rsi
-    label, css = status_pill(rsi, "low", 30.0)
+    if rsi is not None:
+        history_append(cache, "RSI", rsi)
+    label, css = status_pill(rsi, "low", 30.0, cache=cache, token="RSI")
     values["RSI_STATUS_LABEL"], values["RSI_STATUS_CLASS"] = label, css
     values["RSI_TARGET"] = target_for("RSI")
 
     macd_hist, macd_crossed = compute_weekly_macd(price_history)
     values["MACD"] = macd_hist
     values["MACD_CROSSED"] = "Yes — fresh this week" if macd_crossed else "No"
-    label, css = status_pill(macd_hist, "high", 0.0)
+    if macd_hist is not None:
+        history_append(cache, "MACD", macd_hist)
+    label, css = status_pill(macd_hist, "high", 0.0, cache=cache, token="MACD")
     values["MACD_STATUS_LABEL"], values["MACD_STATUS_CLASS"] = label, css
     values["MACD_TARGET"] = target_for("MACD")
 
     bollinger_pb = compute_bollinger(price_history)
     values["BOLLINGER"] = bollinger_pb
-    label, css = status_pill(bollinger_pb, "low", 0.2)
+    if bollinger_pb is not None:
+        history_append(cache, "BOLLINGER", bollinger_pb)
+    label, css = status_pill(bollinger_pb, "low", 0.2, cache=cache, token="BOLLINGER")
     values["BOLLINGER_STATUS_LABEL"], values["BOLLINGER_STATUS_CLASS"] = label, css
     values["BOLLINGER_TARGET"] = target_for("BOLLINGER")
     print(f"  RSI: {rsi} | MACD histogram: {macd_hist} (crossed: {macd_crossed}) | Bollinger %B: {bollinger_pb}")
@@ -1379,7 +1526,12 @@ def main():
     fng_val, fng_label = fetch_fear_greed()
     values["FNG"] = fng_val
     values["FNG_LABEL"] = fng_label
-    label, css = status_pill(fng_val, "low", 20.0)
+    if fng_val is not None:
+        try:
+            history_append(cache, "FNG", float(fng_val))
+        except (TypeError, ValueError):
+            pass
+    label, css = status_pill(fng_val, "low", 20.0, cache=cache, token="FNG")
     values["FNG_STATUS_LABEL"], values["FNG_STATUS_CLASS"] = label, css
     values["FNG_TARGET"] = target_for("FNG")
     print(f"  Fear & Greed: {fng_val} ({fng_label})")
@@ -1430,6 +1582,7 @@ def main():
     values["TOTAL_TRACKED_COUNT"] = len(MASTER_RANK_ORDER) + 1  # +1 for Power Law, always rank 1
     verdict = build_verdict(values)
     values.update(verdict)
+    values["SIGNAL_SUMMARY_BOX"] = build_signal_summary_html(values)
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")
 
     with open("dashboard_template.html", "r", encoding="utf-8") as f:
