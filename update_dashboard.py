@@ -791,6 +791,40 @@ DISPLAY_NAMES = {
 }
 
 
+TOTAL_POSSIBLE_WEIGHT = sum(WEIGHT_MAP.values())
+
+
+def build_full_weighted_breakdown(values):
+    """Every indicator in WEIGHT_MAP, sorted heaviest to lightest, with its
+    true share of the TOTAL weight pool (not just the weight of whatever
+    happened to fire today) — this is the fix for the old "3/6" framing,
+    which only counted indicators that had a scoreable reading this
+    specific run and made the tracked list look much smaller than it is.
+    Returns a ready-to-insert HTML string, since the row count and status
+    mix changes every day."""
+    rows = []
+    for token, weight in sorted(WEIGHT_MAP.items(), key=lambda kv: kv[1], reverse=True):
+        name = DISPLAY_NAMES.get(token, token)
+        pct_of_total = round((weight / TOTAL_POSSIBLE_WEIGHT) * 100, 1)
+        css = values.get(f"{token}_STATUS_CLASS")
+        label = values.get(f"{token}_STATUS_LABEL", "CHECK")
+        if css == "st-buy":
+            status_text, status_css = "BUY-FAVORABLE", "st-buy"
+        elif css == "st-no":
+            status_text, status_css = "NOT YET", "st-no"
+        elif label and label.startswith("STALE"):
+            status_text, status_css = label, "st-mid"
+        else:
+            status_text, status_css = "NO SCOREABLE READING TODAY", "st-mid"
+
+        rows.append(
+            f'<tr><td class="ind-name">{name}</td>'
+            f'<td class="reading">{pct_of_total}%</td>'
+            f'<td><span class="status-pill {status_css}">{status_text}</span></td></tr>'
+        )
+    return "\n".join(rows)
+
+
 def build_verdict(values):
     scored, excluded_names, buy_names = [], [], []
     for token, weight in WEIGHT_MAP.items():
@@ -1052,6 +1086,8 @@ def main():
         values["STALENESS_BANNER"] = ""
 
     print("Building weighted verdict synthesis...")
+    values["FULL_WEIGHTED_BREAKDOWN_ROWS"] = build_full_weighted_breakdown(values)
+    values["TOTAL_TRACKED_COUNT"] = len(WEIGHT_MAP)
     verdict = build_verdict(values)
     values.update(verdict)
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")

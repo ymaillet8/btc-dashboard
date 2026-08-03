@@ -88,7 +88,7 @@
     </div>
     <div class="master" style="border-color:var(--border);">
       <div class="master-note" style="font-size:13.5px; line-height:1.7;">
-        <strong style="color:var(--text);">Where things stand:</strong> {{VERDICT_COUNT}} of your weighted indicators are currently buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong style="color:var(--red);">Power Law, your actual master signal, has not confirmed</strong> — check ITC directly, since nothing below can substitute for that.
+        <strong style="color:var(--text);">Where things stand:</strong> {{VERDICT_COUNT}} of the indicators with a clear reading today are buy-favorable ({{VERDICT_PCT}}% of today's scored weight) — {{VERDICT_HEADLINE}}. That's out of {{TOTAL_TRACKED_COUNT}} indicators tracked in total; the rest simply didn't return a scoreable signal today (see the full weighted breakdown further down for every one of them, heaviest to lightest). <strong style="color:var(--red);">Power Law, your actual master signal, has not confirmed</strong> — check ITC directly, since nothing below can substitute for that.
         <br><br>
         <strong style="color:var(--text);">What's flashing buy right now:</strong> {{VERDICT_BUY_LIST}}.
         <br><br>
@@ -215,7 +215,7 @@
         <strong style="color:var(--text);">Flashing buy this run:</strong> {{VERDICT_BUY_LIST}}
       </div>
       <div class="master-note" style="margin-top:6px;">
-        <strong style="color:var(--text);">Excluded from scoring ({{VERDICT_EXCLUDED_COUNT}}, no clear reading this run):</strong> {{VERDICT_EXCLUDED_LIST}}
+        <strong style="color:var(--text);">No scoreable reading this run ({{VERDICT_EXCLUDED_COUNT}}):</strong> {{VERDICT_EXCLUDED_LIST}} — <span style="color:var(--text-faint);">excluded from the count above, not counted as bearish. See the full breakdown below for all {{TOTAL_TRACKED_COUNT}} tracked indicators, including these.</span>
       </div>
       <div class="master-note" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border); font-size:12px;">
         <strong style="color:var(--red);">This is a mechanical tally of the rows above, not financial advice and not a price prediction.</strong>
@@ -225,6 +225,20 @@
         information.
       </div>
     </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">WEIGHTED</span>
+      <span class="section-title">Full breakdown — all {{TOTAL_TRACKED_COUNT}} tracked indicators, heaviest to lightest</span>
+      <span class="section-desc">% = each indicator's true share of the total weight pool, not just today's scored subset</span>
+    </div>
+    <table>
+      <thead><tr><th style="width:50%">Indicator</th><th style="width:20%">Weight (% of all tracked)</th><th style="width:30%">Status today</th></tr></thead>
+      <tbody>
+        {{FULL_WEIGHTED_BREAKDOWN_ROWS}}
+      </tbody>
+    </table>
   </div>
 
   <div class="section">
