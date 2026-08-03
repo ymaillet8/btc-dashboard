@@ -768,13 +768,31 @@ def status_pill(value, direction, threshold):
 # ---------------------------------------------------------------------------
 WEIGHT_MAP = {
     # Tier 1 — highest-ranked, closest in spirit to Power Law (weight 3)
-    "MVRV_Z": 3, "REALIZED_PRICE": 3, "PUELL": 3, "RESERVE_RISK": 3,
+    "MVRV_Z": 3, "PUELL": 3,
+    # NOTE: Price vs. Realized Price is intentionally NOT in this dict.
+    # It's mathematically the un-normalized precursor to MVRV Z-Score
+    # (spot/realized price IS the raw MVRV ratio; the Z-score is that same
+    # ratio standardized against its own volatility) — scoring both would
+    # double-count one underlying signal. Still fetched, still displayed
+    # with its own real BUY ZONE/NOT YET status (genuinely useful to see
+    # the raw dollar comparison), just excluded from the weighted verdict
+    # tally. Same "displayed, not scored" treatment as Thermocap and Pi
+    # Cycle below, for a different reason (those two have no defensible
+    # fixed threshold at all; this one has a real threshold but is
+    # redundant with an already-scored indicator).
+    "RESERVE_RISK": 2.5,
     # Tier 2 — solid on-chain (weight 2)
-    "THERMOCAP": 2, "LTH_SOPR": 2, "PROD_COST": 2, "NVT_GC": 2,
+    "THERMOCAP": 2, "LTH_SOPR": 2, "NVT_GC": 2,
     "PI_CYCLE": 2, "ASOPR_EST": 2,
+    "PROD_COST": 2.5,
     # Tier 3 — behavioral/technical (weight 1.5)
     "MINER_CAP": 1.5, "MACD": 1.5,
     # Tier 4 — sentiment/blunt technicals (weight 1)
+    # Note: Mayer, RSI, and Bollinger are mutually correlated (all derived
+    # from the same underlying price series, just different windows) —
+    # flagged honestly, but left unchanged since further discounting an
+    # already-minimal weight has little practical effect and risks false
+    # precision rather than reflecting a real finding.
     "SUPPLY_LOSS": 1, "MAYER": 1, "RSI": 1, "FNG": 1, "BOLLINGER": 1,
 }
 
