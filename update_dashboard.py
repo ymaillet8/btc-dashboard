@@ -59,6 +59,53 @@ ASSUMED_ELECTRICITY_COST_USD_PER_KWH = 0.05  # blended global miner electricity 
 BG_KEY = os.environ.get("BGEOMETRICS_API_KEY", "")
 BG_BASE = "https://api.bitcoin-data.com/v1"
 
+# ---------------------------------------------------------------------------
+# Last-known-good value cache. Real production trackers fall back to the
+# last successful reading (clearly labeled as such) when a live fetch
+# fails — e.g. during today's BGeometrics rate-limit exhaustion — instead
+# of just going blank. This file gets committed alongside dashboard.html
+# by the workflow, so it persists between daily runs.
+# ---------------------------------------------------------------------------
+CACHE_FILE = "last_known_good.json"
+CACHE_MAX_AGE_DAYS = 5  # older than this, a stale fallback isn't shown at all
+
+
+def load_cache():
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_cache(cache):
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        print(f"  ! failed to save cache file: {e}")
+
+
+def cache_lookup(cache, key):
+    """Returns (value, date_str) if a usable (not-too-old) cached value
+    exists for this key, else (None, None)."""
+    entry = cache.get(key)
+    if not entry:
+        return None, None
+    try:
+        cached_date = datetime.fromisoformat(entry["date"])
+        age_days = (datetime.now(timezone.utc) - cached_date).days
+        if age_days > CACHE_MAX_AGE_DAYS:
+            return None, None
+        return entry["value"], entry["date"][:10]
+    except (KeyError, ValueError, TypeError):
+        return None, None
+
+
+def cache_store(cache, key, value):
+    if value is not None:
+        cache[key] = {"value": value, "date": datetime.now(timezone.utc).isoformat()}
+
 # token -> (endpoint slug [best guess, unverified], direction, threshold)
 BG_METRICS = {
     "MVRV_Z":        ("mvrv-zscore",      "low",  0.0),
@@ -487,17 +534,23 @@ MIN_VOLUME_USD = 25_000  # ignore illiquid/noise markets below this
 def fetch_polymarket_btc_events():
     """One fetch, sorted by volume, filtered client-side for Bitcoin/BTC
     markets — the Gamma API has no free-text search (a ?q= param is
-    silently ignored), so this is the correct approach, not a shortcut."""
+    silently ignored), so this is the correct approach, not a shortcut.
+
+    Returns (events, fetch_succeeded). fetch_succeeded=False means the
+    request itself failed (network error, bad response shape) — distinct
+    from a successful request that just happened to find zero BTC events,
+    which is a legitimate (if unlikely) outcome, not a failure to fall
+    back from."""
     url = f"{POLYMARKET_BASE}/events?active=true&closed=false&limit=300&order=volume&ascending=false"
     try:
         data = _get_json(url, headers={"User-Agent": "btc-dashboard-bot/1.0"})
     except Exception as e:
         print(f"  ! Polymarket fetch failed: {e}")
-        return []
+        return [], False
 
     if not isinstance(data, list):
         print("  ! Polymarket returned an unexpected shape, skipping")
-        return []
+        return [], False
 
     btc_events = []
     for event in data:
@@ -507,7 +560,7 @@ def fetch_polymarket_btc_events():
         if "bitcoin" not in haystack and "btc" not in haystack:
             continue
         btc_events.append(event)
-    return btc_events
+    return btc_events, True
 
 
 def _parse_json_field(raw):
@@ -566,12 +619,21 @@ def _extract_markets(events):
     return markets
 
 
-def build_polymarket_buckets():
+def build_polymarket_buckets(cache=None):
     """For each target horizon, find the BTC market whose expiry is closest
     to that many days out, within the tolerance window, above the volume
     floor. Returns a dict of template-ready values — every bucket that has
-    no reasonable match is explicitly None, not a forced bad guess."""
-    events = fetch_polymarket_btc_events()
+    no reasonable match is explicitly None, not a forced bad guess.
+
+    If the fetch itself failed (network error, bad response), falls back
+    to cached bucket results from a prior successful run where available,
+    clearly labeled as stale. A legitimate "no close market this horizon"
+    result on a successful fetch is NOT treated as a failure — that's an
+    honest, current, non-error outcome and shouldn't be overridden with
+    old cached data."""
+    if cache is None:
+        cache = {}
+    events, fetch_ok = fetch_polymarket_btc_events()
     markets = _extract_markets(events)
     now = datetime.now(timezone.utc)
 
@@ -592,6 +654,7 @@ def build_polymarket_buckets():
                 best_diff = diff
 
         prefix = f"POLY_{horizon}"
+        cache_key = f"poly_{horizon.lower()}"
         if best:
             result[f"{prefix}_QUESTION"] = best["question"]
             result[f"{prefix}_YES_LABEL"] = best["yes_label"]
@@ -599,7 +662,30 @@ def build_polymarket_buckets():
             result[f"{prefix}_DATE"] = best["end_date"].strftime("%Y-%m-%d")
             result[f"{prefix}_VOLUME"] = f"{best['volume']:,.0f}"
             result[f"{prefix}_FOUND"] = True
+            cache_store(cache, cache_key, {
+                "question": best["question"], "yes_label": best["yes_label"],
+                "yes_pct": best["yes_pct"], "date": best["end_date"].strftime("%Y-%m-%d"),
+                "volume": f"{best['volume']:,.0f}",
+            })
+        elif not fetch_ok:
+            cached_val, cached_date = cache_lookup(cache, cache_key)
+            if cached_val:
+                result[f"{prefix}_QUESTION"] = f"{cached_val['question']} (STALE — cached {cached_date})"
+                result[f"{prefix}_YES_LABEL"] = cached_val["yes_label"]
+                result[f"{prefix}_YES_PCT"] = cached_val["yes_pct"]
+                result[f"{prefix}_DATE"] = cached_val["date"]
+                result[f"{prefix}_VOLUME"] = cached_val["volume"]
+                result[f"{prefix}_FOUND"] = True
+                print(f"  {horizon}: live fetch failed, using cached market from {cached_date}")
+            else:
+                result[f"{prefix}_QUESTION"] = "Polymarket fetch failed and no cached fallback available"
+                result[f"{prefix}_YES_LABEL"] = "—"
+                result[f"{prefix}_YES_PCT"] = "—"
+                result[f"{prefix}_DATE"] = "—"
+                result[f"{prefix}_VOLUME"] = "—"
+                result[f"{prefix}_FOUND"] = False
         else:
+            # Fetch succeeded, genuinely no close-enough market — honest, not an error
             result[f"{prefix}_QUESTION"] = "No liquid BTC market found near this horizon"
             result[f"{prefix}_YES_LABEL"] = "—"
             result[f"{prefix}_YES_PCT"] = "—"
@@ -766,6 +852,8 @@ def build_verdict(values):
 
 def main():
     values = {}
+    cache = load_cache()
+    print(f"Loaded cache with {len(cache)} previously-known values")
 
     if not BG_KEY:
         print(f"! BGEOMETRICS_API_KEY not set — those {len(BG_METRICS)} rows will show CHECK.")
@@ -773,16 +861,31 @@ def main():
     print(f"Fetching {len(BG_METRICS)} indicators from BGeometrics...")
     for token, (slug, direction, threshold) in BG_METRICS.items():
         val = fetch_bg_latest(slug)
-        values[token] = val
-        label, css = status_pill(val, direction, threshold)
+        if val is not None:
+            cache_store(cache, token, val)
+            values[token] = val
+            label, css = status_pill(val, direction, threshold)
+        else:
+            cached_val, cached_date = cache_lookup(cache, token)
+            if cached_val is not None:
+                values[token] = cached_val
+                label, css = f"STALE ({cached_date})", "st-mid"
+                print(f"  {token}: live fetch failed, using cached value from {cached_date}")
+            else:
+                values[token] = None
+                label, css = "CHECK", "st-mid"
         values[f"{token}_STATUS_LABEL"] = label
         values[f"{token}_STATUS_CLASS"] = css
-        print(f"  {token} ({slug}): {val} -> {label}")
+        print(f"  {token} ({slug}): {values[token]} -> {label}")
 
     # Supply in Loss = 100 - Supply in Profit (BGeometrics only exposes the
     # profit side under this slug guess; the loss framing is the one your
     # original ranking used, and the one this whole project started from).
+    # If the underlying Supply-in-Profit value came from cache (stale),
+    # this derived figure inherits that staleness rather than looking
+    # freshly computed.
     supply_profit_val = values.get("SUPPLY_PROFIT")
+    supply_profit_is_stale = values.get("SUPPLY_PROFIT_STATUS_LABEL", "").startswith("STALE")
     supply_loss_val = None
     if supply_profit_val is not None:
         try:
@@ -790,15 +893,25 @@ def main():
         except (TypeError, ValueError):
             supply_loss_val = None
     values["SUPPLY_LOSS"] = supply_loss_val
-    label, css = status_pill(supply_loss_val, "high", 50.0)
+    if supply_profit_is_stale:
+        cached_date = values["SUPPLY_PROFIT_STATUS_LABEL"].split("(")[1].rstrip(")")
+        label, css = f"STALE ({cached_date})", "st-mid"
+    else:
+        label, css = status_pill(supply_loss_val, "high", 50.0)
     values["SUPPLY_LOSS_STATUS_LABEL"], values["SUPPLY_LOSS_STATUS_CLASS"] = label, css
     print(f"  SUPPLY_LOSS (derived from SUPPLY_PROFIT): {supply_loss_val} -> {label}")
 
     # aSOPR estimate, derived from the same SOPR fetch — see
     # compute_asopr_estimate() for the reasoning behind the formula.
+    # Same staleness-propagation logic as above.
+    sopr_is_stale = values.get("SOPR_STATUS_LABEL", "").startswith("STALE")
     asopr_est = compute_asopr_estimate(values.get("SOPR"))
     values["ASOPR_EST"] = asopr_est
-    label, css = status_pill(asopr_est, "low", 1.0)
+    if sopr_is_stale:
+        cached_date = values["SOPR_STATUS_LABEL"].split("(")[1].rstrip(")")
+        label, css = f"STALE ({cached_date})", "st-mid"
+    else:
+        label, css = status_pill(asopr_est, "low", 1.0)
     values["ASOPR_EST_STATUS_LABEL"], values["ASOPR_EST_STATUS_CLASS"] = label, css
     print(f"  ASOPR_EST (modeled from SOPR={values.get('SOPR')}): {asopr_est} -> {label}")
 
@@ -808,8 +921,14 @@ def main():
 
     # Give Realized Price a real dynamic signal now (was a static label before):
     # buy-favorable when spot trades below the realized-price cost basis.
+    # Skip the fresh comparison if the realized-price figure itself is a
+    # stale cache fallback — don't compare today's live spot price against
+    # a days-old cost-basis snapshot and present it with fresh confidence.
     realized_price_val = values.get("REALIZED_PRICE")
-    if realized_price_val is not None and spot_price is not None:
+    realized_price_is_stale = values.get("REALIZED_PRICE_STATUS_LABEL", "").startswith("STALE")
+    if realized_price_is_stale:
+        rp_label, rp_css = values["REALIZED_PRICE_STATUS_LABEL"], "st-mid"
+    elif realized_price_val is not None and spot_price is not None:
         try:
             rp = float(realized_price_val)
             rp_label, rp_css = ("BUY ZONE", "st-buy") if spot_price < rp else ("NOT YET", "st-no")
@@ -893,7 +1012,7 @@ def main():
     print(f"  Fear & Greed: {fng_val} ({fng_label})")
 
     print("Fetching Polymarket Bitcoin prediction markets (weekly/biweekly/monthly/quarterly/yearly)...")
-    poly_values = build_polymarket_buckets()
+    poly_values = build_polymarket_buckets(cache)
     values.update(poly_values)
     for horizon in HORIZONS:
         found = poly_values.get(f"POLY_{horizon}_FOUND")
@@ -908,6 +1027,29 @@ def main():
     print(f"  {days_since_top} days since last cycle top, projected bottom {projected_bottom} ({days_to_projected} days away)")
 
     values["LAST_UPDATED"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # Overall staleness banner: count how many BGeometrics metrics are
+    # running on cached (not live) data this run. A couple is normal
+    # noise (a single wrong slug guess); a lot signals something bigger
+    # (quota exhaustion, an outage) worth flagging prominently rather
+    # than making you notice it by scanning every row yourself.
+    stale_count = sum(
+        1 for token in BG_METRICS
+        if values.get(f"{token}_STATUS_LABEL", "").startswith("STALE")
+    )
+    if stale_count >= 4:
+        values["STALENESS_BANNER"] = (
+            f'<div class="master" style="border-color:#4a3a14; margin-bottom:20px;">'
+            f'<div class="master-top"><div><div class="master-label" style="color:var(--amber);">DATA FRESHNESS NOTICE</div>'
+            f'<div class="master-name">{stale_count} of {len(BG_METRICS)} BGeometrics indicators are showing cached, '
+            f'not live, data this run</div></div></div>'
+            f'<div class="master-note">Likely cause: the free-tier hourly request quota was exhausted before this run '
+            f'(check the Action log for HTTP 429 errors). This is expected to self-correct on tomorrow\'s scheduled run. '
+            f'Cached values are clearly labeled "STALE (date)" in the table below and are excluded from the weighted verdict.</div>'
+            f'</div>'
+        )
+    else:
+        values["STALENESS_BANNER"] = ""
 
     print("Building weighted verdict synthesis...")
     verdict = build_verdict(values)
@@ -924,6 +1066,8 @@ def main():
     with open("dashboard.html", "w", encoding="utf-8") as f:
         f.write(html)
 
+    save_cache(cache)
+    print(f"Saved cache with {len(cache)} entries")
     print("Wrote dashboard.html")
 
 

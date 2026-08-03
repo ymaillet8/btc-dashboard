@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BTC Bottom Watch — Auto-Updating Signal Board</title>
 <style>
@@ -75,8 +78,29 @@
     <div class="master-note">This is the only indicator with veto power. It stays manual because no free source replicates Santostasi's exact paid model — check your ITC subscription directly and update this line yourself when it flashes.</div>
   </div>
 
+  {{STALENESS_BANNER}}
+
   <div class="section">
     <div class="section-head">
+      <span class="section-num">SUMMARY</span>
+      <span class="section-title">Plain English — what today's readings actually mean</span>
+      <span class="section-desc">A translation of the verdict below, not a new signal — same disclaimer applies</span>
+    </div>
+    <div class="master" style="border-color:var(--border);">
+      <div class="master-note" style="font-size:13.5px; line-height:1.7;">
+        <strong style="color:var(--text);">Where things stand:</strong> {{VERDICT_COUNT}} of your weighted indicators are currently buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong style="color:var(--red);">Power Law, your actual master signal, has not confirmed</strong> — check ITC directly, since nothing below can substitute for that.
+        <br><br>
+        <strong style="color:var(--text);">What's flashing buy right now:</strong> {{VERDICT_BUY_LIST}}.
+        <br><br>
+        <strong style="color:var(--text);">Reading the pattern, not just the count:</strong> if the indicators currently flashing buy are concentrated in your <em>high-weight, on-chain</em> tier (MVRV Z-Score, Realized Price, Puell, Reserve Risk) rather than the sentiment/technical tier, that's historically been a more meaningful cluster than the same count spread across lower-weight rows — worth glancing at which specific names are in that list above, not just how many.
+        <br><br>
+        <strong style="color:var(--text);">On the Polymarket section below:</strong> if the crowd is pricing a near-term recovery as unlikely while your on-chain indicators are still mixed, that combination (cheap valuation + skeptical crowd) is the classic shape of a bottoming process still in progress, not yet a confirmed low — read both sections together rather than in isolation.
+        <br><br>
+        <span style="color:var(--text-faint); font-size:12px;">This paragraph is generated from the same mechanical data as the Verdict section — it does not know anything the numbers below don't already show you, and it is not telling you what to do with your capital. It's a faster way to read the board, written in sentences instead of a table.</span>
+      </div>
+    </div>
+  </div>
+
       <span class="section-num">LIVE</span>
       <span class="section-title">10 live indicators <span class="live-badge">BGEOMETRICS · FREE TIER</span></span>
       <span class="section-desc">Uses all 10 of the confirmed 10/hour free quota — 0 spare, a deliberate tradeoff (see README)</span>
