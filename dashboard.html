@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BTC Bottom Watch — Auto-Updating Signal Board</title>
 <style>
@@ -61,7 +64,7 @@
   <header>
     <div class="eyebrow">Auto-updating tracker · rebuilt daily via GitHub Actions</div>
     <h1>BTC Bottom Watch</h1>
-    <div class="sub">Live free-API indicator board, weighed underneath Santostasi's Power Law — the only signal with veto power here. Last refreshed: 2026-08-03 03:01 UTC</div>
+    <div class="sub">Live free-API indicator board, weighed underneath Santostasi's Power Law — the only signal with veto power here. Last refreshed: 2026-08-03 03:24 UTC</div>
   </header>
 
   <div class="master">
@@ -75,8 +78,29 @@
     <div class="master-note">This is the only indicator with veto power. It stays manual because no free source replicates Santostasi's exact paid model — check your ITC subscription directly and update this line yourself when it flashes.</div>
   </div>
 
+  
+
   <div class="section">
     <div class="section-head">
+      <span class="section-num">SUMMARY</span>
+      <span class="section-title">Plain English — what today's readings actually mean</span>
+      <span class="section-desc">A translation of the verdict below, not a new signal — same disclaimer applies</span>
+    </div>
+    <div class="master" style="border-color:var(--border);">
+      <div class="master-note" style="font-size:13.5px; line-height:1.7;">
+        <strong style="color:var(--text);">Where things stand:</strong> 2/6 of your weighted indicators are currently buy-favorable (33.3% of scored weight) — Partial confluence — early accumulation zone. <strong style="color:var(--red);">Power Law, your actual master signal, has not confirmed</strong> — check ITC directly, since nothing below can substitute for that.
+        <br><br>
+        <strong style="color:var(--text);">What's flashing buy right now:</strong> MACD (weekly), Mayer Multiple.
+        <br><br>
+        <strong style="color:var(--text);">Reading the pattern, not just the count:</strong> if the indicators currently flashing buy are concentrated in your <em>high-weight, on-chain</em> tier (MVRV Z-Score, Realized Price, Puell, Reserve Risk) rather than the sentiment/technical tier, that's historically been a more meaningful cluster than the same count spread across lower-weight rows — worth glancing at which specific names are in that list above, not just how many.
+        <br><br>
+        <strong style="color:var(--text);">On the Polymarket section below:</strong> if the crowd is pricing a near-term recovery as unlikely while your on-chain indicators are still mixed, that combination (cheap valuation + skeptical crowd) is the classic shape of a bottoming process still in progress, not yet a confirmed low — read both sections together rather than in isolation.
+        <br><br>
+        <span style="color:var(--text-faint); font-size:12px;">This paragraph is generated from the same mechanical data as the Verdict section — it does not know anything the numbers below don't already show you, and it is not telling you what to do with your capital. It's a faster way to read the board, written in sentences instead of a table.</span>
+      </div>
+    </div>
+  </div>
+
       <span class="section-num">LIVE</span>
       <span class="section-title">10 live indicators <span class="live-badge">BGEOMETRICS · FREE TIER</span></span>
       <span class="section-desc">Uses all 10 of the confirmed 10/hour free quota — 0 spare, a deliberate tradeoff (see README)</span>
@@ -114,7 +138,7 @@
         <tr><td class="ind-name">NVT Golden Cross <span style="color:var(--text-faint)">(exact CryptoQuant formula)</span></td><td class="desc">NVT_diff (10d MA − 30d MA of Market Cap ÷ Tx Volume), standardized as a z-score against its own 300-day rolling volatility. &gt;2.2 overpriced, &lt;−1.6 = bottom zone, per CryptoQuant's published definition</td><td class="reading">-0.81</td><td><span class="status-pill st-mid">NEUTRAL</span></td><td class="ind-source"><a href="https://userguide.cryptoquant.com/cryptoquant-metrics/network/nvt-golden-cross" target="_blank">methodology</a></td></tr>
         <tr><td class="ind-name">1064/364-Day Cycle Rhythm</td><td class="desc">Calendar-only projection from your existing cycle-timing model</td><td class="reading">301d since top<br>proj. bottom 2026-10-27</td><td><span class="status-pill st-mid">LOW WEIGHT</span></td><td class="ind-source">no API — pure date math</td></tr>
         <tr><td class="ind-name">Fear &amp; Greed Index</td><td class="desc">Composite sentiment score</td><td class="reading">28 (Fear)</td><td><span class="status-pill st-no">NOT YET</span></td><td class="ind-source"><a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">MACD <span style="color:var(--text-faint)">(weekly, 12/26/9)</span></td><td class="desc">Trend-following crossover — bullish histogram flip has historically flagged major reversals, including Dec 2022</td><td class="reading">260.5<br><span style="color:var(--text-faint)">fresh cross: No</span></td><td><span class="status-pill st-buy">ELEVATED</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
+        <tr><td class="ind-name">MACD <span style="color:var(--text-faint)">(weekly, 12/26/9)</span></td><td class="desc">Trend-following crossover — bullish histogram flip has historically flagged major reversals, including Dec 2022</td><td class="reading">258.9<br><span style="color:var(--text-faint)">fresh cross: No</span></td><td><span class="status-pill st-buy">ELEVATED</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
         <tr><td class="ind-name">Weekly RSI <span style="color:var(--text-faint)">(14-period)</span></td><td class="desc">Classic oversold oscillator — generic (not BTC-specific), can stay pinned for months in a strong downtrend</td><td class="reading">30.1</td><td><span class="status-pill st-no">NOT YET</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
         <tr><td class="ind-name">Bollinger %B <span style="color:var(--text-faint)">(20-week, 2σ)</span></td><td class="desc">Where price sits within its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal</td><td class="reading">0.257</td><td><span class="status-pill st-no">NOT YET</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
       </tbody>
@@ -228,7 +252,7 @@
         <div class="footer-body">Once GitHub Pages is enabled, this dashboard lives at a public URL (e.g. yourname.github.io/btc-dashboard). Send him that one link — it always shows the latest auto-fetched numbers, no file to re-send.</div>
       </div>
     </div>
-    <div class="updated">Auto-rebuilt: 2026-08-03 03:01 UTC</div>
+    <div class="updated">Auto-rebuilt: 2026-08-03 03:24 UTC</div>
   </footer>
 
 </div>
