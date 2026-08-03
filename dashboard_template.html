@@ -6,268 +6,478 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BTC Bottom Watch — Auto-Updating Signal Board</title>
+<title>₿TC Bottom Watch — A Weighted Cycle-Bottom Signal Board</title>
 <style>
   :root{
-    --bg:#0a0c10; --panel:#12151b; --panel-2:#161a21; --border:#232830;
-    --text:#e6e9ef; --text-dim:#8a93a3; --text-faint:#5a6272;
-    --green:#34d399; --green-dim:#1c4436; --red:#f87171; --red-dim:#43201f;
-    --amber:#fbbf24; --amber-dim:#4a3a14; --blue:#60a5fa;
+    --bg:#0a0c10; --panel:#12151b; --panel-2:#161a21; --border:#242a33;
+    --text:#e9ecf1; --text-dim:#9aa3b2; --text-faint:#636e80;
+    --green:#3ddc9a; --green-dim:#173829; --red:#ff6b6b; --red-dim:#3f1e1e;
+    --amber:#f5b942; --amber-dim:#3f3115; --blue:#6ba9fa;
+    --serif: Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, serif;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
     --sans: -apple-system, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
   }
   *{box-sizing:border-box;}
-  body{margin:0; background:var(--bg); color:var(--text); font-family:var(--sans); padding:28px 16px 60px; -webkit-font-smoothing:antialiased;}
+  body{
+    margin:0; background:var(--bg); color:var(--text); font-family:var(--sans);
+    padding:48px 20px 80px; -webkit-font-smoothing:antialiased; font-size:16px; line-height:1.6;
+  }
   .wrap{max-width:1180px; margin:0 auto;}
-  header{margin-bottom:22px;}
-  .eyebrow{font-family:var(--mono); font-size:11px; letter-spacing:.14em; color:var(--text-faint); text-transform:uppercase; margin-bottom:8px;}
-  h1{font-size:26px; margin:0 0 6px; font-weight:650; letter-spacing:-0.01em;}
-  .sub{color:var(--text-dim); font-size:13.5px; max-width:640px; line-height:1.5;}
-  .master{margin-top:22px; border:1px solid var(--border); border-radius:14px; background:linear-gradient(180deg, var(--panel-2), var(--panel)); padding:22px 24px; position:relative; overflow:hidden;}
-  .master::before{content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--red);}
-  .master-top{display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:14px;}
+  a{color:var(--blue);}
+
+  /* --- Title & abstract --- */
+  .titleblock{text-align:center; margin-bottom:40px;}
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.16em; color:var(--text-faint);
+    text-transform:uppercase; margin-bottom:14px;
+  }
+  h1{
+    font-family:var(--serif); font-size:44px; font-weight:700; margin:0 0 18px;
+    letter-spacing:-0.01em; color:var(--text);
+  }
+  .abstract{
+    font-family:var(--serif); font-size:17px; line-height:1.75; color:var(--text-dim);
+    max-width:680px; margin:0 auto; font-style:italic;
+  }
+  .abstract strong{color:var(--text); font-style:normal;}
+  .updated-line{
+    font-family:var(--mono); font-size:12px; color:var(--text-faint); margin-top:16px;
+  }
+
+  /* --- Section scaffolding --- */
+  .section{margin-top:56px;}
+  .section-head{margin-bottom:18px; border-bottom:1px solid var(--border); padding-bottom:12px;}
+  .section-num{
+    font-family:var(--mono); font-size:12px; color:var(--text-faint); letter-spacing:.08em;
+  }
+  .section-title{
+    font-family:var(--serif); font-size:23px; font-weight:700; margin-top:4px; color:var(--text);
+  }
+  .section-sub{font-size:13.5px; color:var(--text-dim); margin-top:6px; max-width:720px;}
+
+  /* --- Power Law master banner --- */
+  .master{
+    border:1px solid var(--border); border-radius:12px;
+    background:linear-gradient(180deg, var(--panel-2), var(--panel));
+    padding:28px 30px; position:relative; overflow:visible;
+  }
+  .master::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--red); border-radius:5px 0 0 5px;}
+  .master-top{display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:16px;}
   .master-label{font-family:var(--mono); font-size:11px; letter-spacing:.12em; color:var(--text-faint); text-transform:uppercase;}
-  .master-name{font-size:19px; font-weight:650; margin-top:4px;}
-  .master-status{display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); font-size:13px; font-weight:600; padding:7px 14px; border-radius:999px; white-space:nowrap; background:var(--red-dim); color:var(--red); border:1px solid rgba(248,113,113,.25);}
+  .master-name{font-family:var(--serif); font-size:24px; font-weight:700; margin-top:6px;}
+  .master-status{
+    display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); font-size:13px; font-weight:600;
+    padding:8px 16px; border-radius:999px; white-space:nowrap; background:var(--red-dim); color:var(--red);
+    border:1px solid rgba(255,107,107,.3);
+  }
   .dot{width:7px; height:7px; border-radius:50%; background:currentColor;}
-  .master-note{margin-top:14px; font-size:13.5px; color:var(--text-dim); line-height:1.55; max-width:760px;}
-  .section{margin-top:34px;}
-  .section-head{display:flex; align-items:baseline; gap:10px; margin-bottom:12px; flex-wrap:wrap;}
-  .section-num{font-family:var(--mono); font-size:12px; color:var(--text-faint);}
-  .section-title{font-size:15px; font-weight:650;}
-  .section-desc{font-size:12.5px; color:var(--text-dim); margin-left:auto; text-align:right; max-width:340px;}
-  table{width:100%; border-collapse:collapse; font-size:13px;}
-  thead th{text-align:left; font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); font-weight:600; padding:8px 12px; border-bottom:1px solid var(--border);}
-  tbody td{padding:12px; border-bottom:1px solid var(--border); vertical-align:top; color:var(--text);}
+  .master ul{margin:18px 0 0; padding-left:22px; font-size:15px; line-height:1.8; color:var(--text-dim);}
+  .master ul strong{color:var(--text);}
+
+  /* --- Freshness banner --- */
+  .fresh-banner{
+    border:1px solid rgba(245,185,66,.35); background:var(--amber-dim); border-radius:12px;
+    padding:18px 24px; margin-top:24px; font-size:14px; color:var(--text-dim); line-height:1.6;
+  }
+  .fresh-banner strong{color:var(--amber);}
+
+  /* --- Tables --- */
+  table{width:100%; border-collapse:collapse; font-size:14.5px;}
+  thead th{
+    text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--text-faint); font-weight:600; padding:10px 14px; border-bottom:1px solid var(--border);
+  }
+  tbody td{padding:16px 14px; border-bottom:1px solid var(--border); vertical-align:top; color:var(--text); overflow:visible;}
   tbody tr:hover{background:var(--panel);}
-  .ind-name{font-weight:600; font-size:13.5px;}
-  .ind-source a{color:var(--blue); text-decoration:none; font-size:12px;}
+  .ind-name{font-weight:600; font-size:15px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;}
+  .caveat{color:var(--text-faint); font-weight:400; font-size:12.5px;}
+  .ind-source a{font-family:var(--mono); font-size:12px; text-decoration:none;}
   .ind-source a:hover{text-decoration:underline;}
-  .desc{color:var(--text-dim); font-size:12px; line-height:1.5;}
-  .reading{font-family:var(--mono); font-size:12.5px;}
-  .target{font-family:var(--mono); font-size:11.5px; color:var(--text-faint);}
-  .status-pill{display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:99px; font-family:var(--mono); font-size:11px; font-weight:600; white-space:nowrap;}
+  .reading{font-family:var(--mono); font-size:15px; font-weight:600;}
+  .target{font-family:var(--mono); font-size:13px; color:var(--text-dim);}
+  .status-pill{
+    display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:999px;
+    font-family:var(--mono); font-size:11.5px; font-weight:600; white-space:nowrap;
+  }
   .st-buy{background:var(--green-dim); color:var(--green);}
   .st-no{background:var(--red-dim); color:var(--red);}
   .st-mid{background:var(--amber-dim); color:var(--amber);}
-  footer{margin-top:44px; padding-top:20px; border-top:1px solid var(--border);}
-  .footer-grid{display:grid; grid-template-columns:1fr 1fr; gap:28px;}
-  @media (max-width:720px){.footer-grid{grid-template-columns:1fr;} .section-desc{display:none;} table{font-size:12px;}}
-  .footer-title{font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:8px;}
-  .footer-body{font-size:12.5px; color:var(--text-dim); line-height:1.6;}
-  .updated{font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:26px;}
-  .live-badge{font-family:var(--mono); font-size:10px; color:var(--green); border:1px solid rgba(52,211,153,.3); background:var(--green-dim); padding:2px 8px; border-radius:99px; letter-spacing:.06em;}
+  .table-source-line{font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:10px;}
+
+  /* --- Hover tooltips (CSS-only) --- */
+  .tip-wrap{position:relative; display:inline-flex; align-items:center;}
+  .tip-icon{
+    display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px;
+    border-radius:50%; background:var(--panel-2); border:1px solid var(--border); color:var(--text-faint);
+    font-family:var(--mono); font-size:11px; cursor:help; flex-shrink:0; user-select:none;
+  }
+  .tip-content{
+    visibility:hidden; opacity:0; position:absolute; bottom:135%; left:50%; transform:translateX(-50%) translateY(4px);
+    width:300px; max-width:70vw; background:var(--panel-2); border:1px solid var(--border); border-radius:10px;
+    padding:14px 16px; font-family:var(--sans); font-size:13px; line-height:1.6; color:var(--text-dim);
+    font-weight:400; box-shadow:0 12px 32px rgba(0,0,0,.55); z-index:60; text-align:left; white-space:normal;
+    transition:opacity .15s ease, transform .15s ease; pointer-events:none;
+  }
+  .tip-content strong{color:var(--text);}
+  .tip-content::after{
+    content:""; position:absolute; top:100%; left:50%; transform:translateX(-50%);
+    border:7px solid transparent; border-top-color:var(--panel-2);
+  }
+  .tip-wrap:hover .tip-content, .tip-wrap:focus-within .tip-content{
+    visibility:visible; opacity:1; transform:translateX(-50%) translateY(0);
+  }
+
+  /* --- Rank table specific --- */
+  .rank-num{font-family:var(--mono); color:var(--text-faint); font-size:13px; width:36px;}
+  tr.rank-veto{background:rgba(107,169,250,.06);}
+  tr.rank-veto .ind-name{color:var(--blue);}
+  tr.rank-na .ind-name{color:var(--text-dim);}
+  .na-reason{font-size:12px; color:var(--text-faint); font-weight:400; margin-top:3px; flex-basis:100%;}
+
+  /* --- Discussion / summary --- */
+  .discussion{
+    font-family:var(--serif); font-size:16px; line-height:1.8; color:var(--text-dim);
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:26px 30px;
+  }
+  .discussion strong{color:var(--text); font-family:var(--sans); font-weight:600;}
+  .discussion .fine-print{
+    margin-top:20px; padding-top:16px; border-top:1px solid var(--border); font-family:var(--sans);
+    font-size:12px; color:var(--text-faint); font-style:normal; line-height:1.6;
+  }
+  .fine-print strong{color:var(--red);}
+
+  /* --- Footer --- */
+  footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-faint); line-height:1.7;}
+  footer a{color:var(--text-dim);}
+  .manual-line{margin-top:14px; font-size:12.5px; color:var(--text-faint);}
+  .manual-line a{color:var(--text-dim);}
+
+  @media (max-width:720px){
+    h1{font-size:32px;} .abstract{font-size:15px;} .master-name{font-size:20px;}
+    table{font-size:13px;} tbody td{padding:12px 10px;} .tip-content{width:220px;}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
 
-  <header>
-    <div class="eyebrow">Auto-updating tracker · rebuilt daily via GitHub Actions</div>
-    <h1>BTC Bottom Watch</h1>
-    <div class="sub">Live free-API indicator board, weighed underneath Santostasi's Power Law — the only signal with veto power here. Last refreshed: {{LAST_UPDATED}}</div>
-  </header>
-
-  <div class="master">
-    <div class="master-top">
-      <div>
-        <div class="master-label">Master signal — manual, paid, not auto-fetched</div>
-        <div class="master-name">Santostasi Bitcoin Power Law — Lower Band Touch</div>
-      </div>
-      <div class="master-status"><span class="dot"></span> CHECK ITC MANUALLY</div>
-    </div>
-    <div class="master-note">This is the only indicator with veto power. It stays manual because no free source replicates Santostasi's exact paid model — check your ITC subscription directly and update this line yourself when it flashes.</div>
+  <div class="titleblock">
+    <div class="eyebrow">Automated · Rebuilt Daily · Free-Data Only</div>
+    <h1>₿TC Bottom Watch</h1>
+    <p class="abstract">A weighted synthesis of the most statistically defensible Bitcoin cycle-bottom indicators — <strong>ranked and scored by significance</strong>, fetched and computed automatically each day from free public data, and weighed underneath the one signal that actually decides anything.</p>
+    <div class="updated-line">Last refreshed: {{LAST_UPDATED}}</div>
   </div>
 
   {{STALENESS_BANNER}}
 
-  <div class="section">
-    <div class="section-head">
-      <span class="section-num">SUMMARY</span>
-      <span class="section-title">Plain English — what today's readings actually mean</span>
-      <span class="section-desc">A translation of the verdict below, not a new signal — same disclaimer applies</span>
-    </div>
-    <div class="master" style="border-color:var(--border);">
-      <div class="master-note" style="font-size:13.5px; line-height:1.7;">
-        <strong style="color:var(--text);">Where things stand:</strong> {{VERDICT_COUNT}} of the indicators with a clear reading today are buy-favorable ({{VERDICT_PCT}}% of today's scored weight) — {{VERDICT_HEADLINE}}. That's out of {{TOTAL_TRACKED_COUNT}} indicators tracked in total; the rest simply didn't return a scoreable signal today (see the full weighted breakdown further down for every one of them, heaviest to lightest). <strong style="color:var(--red);">Power Law, your actual master signal, has not confirmed</strong> — check ITC directly, since nothing below can substitute for that.
-        <br><br>
-        <strong style="color:var(--text);">What's flashing buy right now:</strong> {{VERDICT_BUY_LIST}}.
-        <br><br>
-        <strong style="color:var(--text);">Reading the pattern, not just the count:</strong> if the indicators currently flashing buy are concentrated in your <em>high-weight, on-chain</em> tier (MVRV Z-Score, Realized Price, Puell, Reserve Risk) rather than the sentiment/technical tier, that's historically been a more meaningful cluster than the same count spread across lower-weight rows — worth glancing at which specific names are in that list above, not just how many.
-        <br><br>
-        <strong style="color:var(--text);">On the Polymarket section below:</strong> if the crowd is pricing a near-term recovery as unlikely while your on-chain indicators are still mixed, that combination (cheap valuation + skeptical crowd) is the classic shape of a bottoming process still in progress, not yet a confirmed low — read both sections together rather than in isolation.
-        <br><br>
-        <span style="color:var(--text-faint); font-size:12px;">This paragraph is generated from the same mechanical data as the Verdict section — it does not know anything the numbers below don't already show you, and it is not telling you what to do with your capital. It's a faster way to read the board, written in sentences instead of a table.</span>
-      </div>
-    </div>
-  </div>
-
-      <span class="section-num">LIVE</span>
-      <span class="section-title">10 live indicators <span class="live-badge">BGEOMETRICS · FREE TIER</span></span>
-      <span class="section-desc">Uses all 10 of the confirmed 10/hour free quota — 0 spare, a deliberate tradeoff (see README)</span>
-    </div>
-    <table>
-      <thead><tr><th style="width:19%">Indicator</th><th style="width:33%">What it measures</th><th style="width:12%">Reading</th><th style="width:14%">Target</th><th style="width:12%">Status</th><th style="width:10%">Chart</th></tr></thead>
-      <tbody>
-        <tr><td class="ind-name">MVRV Z-Score</td><td class="desc">Market cap vs. realized cap, standardized</td><td class="reading">{{MVRV_Z}}</td><td class="target">{{MVRV_Z_TARGET}}</td><td><span class="status-pill {{MVRV_Z_STATUS_CLASS}}">{{MVRV_Z_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/mvrv.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">Price vs. Realized Price <span style="color:var(--text-faint)">(shown, not scored)</span></td><td class="desc">Average cost basis of every coin, last-moved price. <strong style="color:var(--amber);">Not counted in the weighted verdict</strong> — this is the raw, un-normalized version of MVRV Z-Score (spot ÷ realized price IS the MVRV ratio); scoring both would double-count one signal. Still real, still useful to glance at directly.</td><td class="reading">${{REALIZED_PRICE}}</td><td class="target">{{REALIZED_PRICE_TARGET}}</td><td><span class="status-pill {{REALIZED_PRICE_STATUS_CLASS}}">{{REALIZED_PRICE_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/realized_price_g.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">Puell Multiple</td><td class="desc">Daily miner issuance value vs. 365-day average</td><td class="reading">{{PUELL}}</td><td class="target">{{PUELL_TARGET}}</td><td><span class="status-pill {{PUELL_STATUS_CLASS}}">{{PUELL_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/puell_multiple.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">Reserve Risk</td><td class="desc">Price relative to long-term holder conviction</td><td class="reading">{{RESERVE_RISK}}</td><td class="target">{{RESERVE_RISK_TARGET}}</td><td><span class="status-pill {{RESERVE_RISK_STATUS_CLASS}}">{{RESERVE_RISK_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/reserve_risk.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">LTH-SOPR</td><td class="desc">Long-term holders spending at profit (&gt;1) or loss (&lt;1)</td><td class="reading">{{LTH_SOPR}}</td><td class="target">{{LTH_SOPR_TARGET}}</td><td><span class="status-pill {{LTH_SOPR_STATUS_CLASS}}">{{LTH_SOPR_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/lth_sopr.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">Thermocap Multiple</td><td class="desc">Market cap vs. cumulative miner revenue ever paid. <strong style="color:var(--amber);">Not counted in the weighted verdict</strong> — no widely-cited fixed "buy" threshold exists for this metric, so there's no defensible number to score against. The original "displayed, not scored" case — several others below get the same treatment for the same reason.</td><td class="reading">{{THERMOCAP}}</td><td class="target">{{THERMOCAP_TARGET}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bitbo.io/thermocap-multiple/" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">Pi Cycle <span style="color:var(--text-faint)">(may be Top, not Bottom variant)</span></td><td class="desc">Long-term moving-average crossover cycle marker. <strong style="color:var(--amber);">Not counted in the weighted verdict</strong> — same reason as Thermocap Multiple (no established fixed threshold), compounded by genuine uncertainty over whether this data is even the Bottom variant your ranking called for.</td><td class="reading">{{PI_CYCLE}}</td><td class="target">{{PI_CYCLE_TARGET}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/pi_cycle.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">NRPL <span style="color:var(--text-faint)">(Net Realized P&amp;L, BTC)</span></td><td class="desc">Realized profit minus realized loss, in BTC — deeply negative means capitulation dominates. The confirmation signal your uploaded research recommends watching (2022's bottom flushed ~1.2M BTC in realized losses). <strong style="color:var(--amber);">Not counted in the weighted verdict</strong> — same reason as Thermocap: no widely-cited fixed threshold for this specific metric exists yet.</td><td class="reading">{{NRPL}}</td><td class="target">{{NRPL_TARGET}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/nrpl.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">% Supply in Loss <span style="color:var(--text-faint)">(derived: 100 − Supply in Profit)</span></td><td class="desc">Share of circulating BTC below cost basis — the metric this whole project started from</td><td class="reading">{{SUPPLY_LOSS}}%</td><td class="target">{{SUPPLY_LOSS_TARGET}}</td><td><span class="status-pill {{SUPPLY_LOSS_STATUS_CLASS}}">{{SUPPLY_LOSS_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://charts.bgeometrics.com/supply_in_profit.html" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">aSOPR <span style="color:var(--text-faint)">(modeled estimate, not licensed)</span></td><td class="desc">SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode's own documented mechanism, not a raw substitute</td><td class="reading">{{ASOPR_EST}}</td><td class="target">{{ASOPR_EST_TARGET}}</td><td><span class="status-pill {{ASOPR_EST_STATUS_CLASS}}">{{ASOPR_EST_STATUS_LABEL}}</span></td><td class="ind-source">formula, see README</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <div class="section-head">
-      <span class="section-num">LIVE</span>
-      <span class="section-title">Self-computed indicators <span class="live-badge">COINGECKO + BLOCKCHAIN.COM · FREE, KEYLESS</span></span>
-      <span class="section-desc">Built from raw free network/price data — labeled "(approx.)" where the standard formula is reconstructed rather than a licensed feed</span>
-    </div>
-    <table>
-      <thead><tr><th style="width:19%">Indicator</th><th style="width:33%">What it measures</th><th style="width:12%">Reading</th><th style="width:14%">Target</th><th style="width:12%">Status</th><th style="width:10%">Source</th></tr></thead>
-      <tbody>
-        <tr><td class="ind-name">Price vs. Production Cost <span style="color:var(--text-faint)">(electricity-only)</span></td><td class="desc">Live hashrate/difficulty × Cambridge CBECI's own $0.05/kWh assumption + 20 J/TH blended efficiency. Reads lower than "all-in" bank headlines (e.g. JPMorgan's ~$78K), which add hardware depreciation/overhead on top — different scope, not a contradiction</td><td class="reading">${{PROD_COST}}<br><span style="color:var(--text-faint)">({{PROD_COST_PCT}}% vs. spot)</span></td><td class="target">{{PROD_COST_TARGET}}</td><td><span class="status-pill {{PROD_COST_STATUS_CLASS}}">{{PROD_COST_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://ccaf.io/cbnsi/cbeci/methodology" target="_blank">methodology</a></td></tr>
-        <tr><td class="ind-name">Mayer Multiple</td><td class="desc">Price divided by 200-day moving average</td><td class="reading">{{MAYER}}</td><td class="target">{{MAYER_TARGET}}</td><td><span class="status-pill {{MAYER_STATUS_CLASS}}">{{MAYER_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
-        <tr><td class="ind-name">Drawdown Magnitude</td><td class="desc">% below all-time high ($126,296, Oct 2025). <strong style="color:var(--amber);">Not counted in the weighted verdict</strong> — purely descriptive by nature. Tells you how far price has fallen, nothing about whether it's done falling, so there's no defensible threshold to score against.</td><td class="reading">{{DRAWDOWN}}%</td><td class="target">{{DRAWDOWN_TARGET}}</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
-        <tr><td class="ind-name">Miner Capitulation Index <span style="color:var(--text-faint)">(Hash Ribbons, Charles Edwards)</span></td><td class="desc">Full original methodology: 30d/60d hashrate MA cross for capitulation/recovery, confirmed by 10d/20d price MA momentum for the actual buy signal — not just the raw hashrate spread</td><td class="reading">{{MINER_CAP_STATE}}<br><span style="color:var(--text-faint)">({{MINER_CAP}}% hashrate MA spread)</span></td><td class="target">{{MINER_CAP_TARGET}}</td><td><span class="status-pill {{MINER_CAP_STATUS_CLASS}}">{{MINER_CAP_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://capriole.com/hash-ribbons-bitcoin-bottoms/" target="_blank">methodology</a></td></tr>
-        <tr><td class="ind-name">NVT Golden Cross <span style="color:var(--text-faint)">(exact CryptoQuant formula)</span></td><td class="desc">NVT_diff (10d MA − 30d MA of Market Cap ÷ Tx Volume), standardized as a z-score against its own 300-day rolling volatility. &gt;2.2 overpriced, &lt;−1.6 = bottom zone, per CryptoQuant's published definition</td><td class="reading">{{NVT_GC}}</td><td class="target">{{NVT_GC_TARGET}}</td><td><span class="status-pill {{NVT_GC_STATUS_CLASS}}">{{NVT_GC_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://userguide.cryptoquant.com/cryptoquant-metrics/network/nvt-golden-cross" target="_blank">methodology</a></td></tr>
-        <tr><td class="ind-name">1064/364-Day Cycle Rhythm</td><td class="desc">Calendar-only projection from your existing cycle-timing model. <strong style="color:var(--amber);">Not counted in the weighted verdict</strong> — it's a date, not a threshold-crossing signal, so there's nothing to score. Already broke once on the last cycle leg (376-381 vs. claimed 364 days) — context at best, per your own earlier assessment.</td><td class="reading">{{DAYS_SINCE_TOP}}d since top<br>proj. bottom {{PROJECTED_BOTTOM}}</td><td class="target">N/A — date, not a level</td><td><span class="status-pill st-mid">CONTEXT ONLY</span></td><td class="ind-source">no API — pure date math</td></tr>
-        <tr><td class="ind-name">Fear &amp; Greed Index</td><td class="desc">Composite sentiment score</td><td class="reading">{{FNG}} ({{FNG_LABEL}})</td><td class="target">{{FNG_TARGET}}</td><td><span class="status-pill {{FNG_STATUS_CLASS}}">{{FNG_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank">view</a></td></tr>
-        <tr><td class="ind-name">MACD <span style="color:var(--text-faint)">(weekly, 12/26/9)</span></td><td class="desc">Trend-following crossover — bullish histogram flip has historically flagged major reversals, including Dec 2022</td><td class="reading">{{MACD}}<br><span style="color:var(--text-faint)">fresh cross: {{MACD_CROSSED}}</span></td><td class="target">{{MACD_TARGET}}</td><td><span class="status-pill {{MACD_STATUS_CLASS}}">{{MACD_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
-        <tr><td class="ind-name">Weekly RSI <span style="color:var(--text-faint)">(14-period)</span></td><td class="desc">Classic oversold oscillator — generic (not BTC-specific), can stay pinned for months in a strong downtrend</td><td class="reading">{{RSI}}</td><td class="target">{{RSI_TARGET}}</td><td><span class="status-pill {{RSI_STATUS_CLASS}}">{{RSI_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
-        <tr><td class="ind-name">Bollinger %B <span style="color:var(--text-faint)">(20-week, 2σ)</span></td><td class="desc">Where price sits within its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal</td><td class="reading">{{BOLLINGER}}</td><td class="target">{{BOLLINGER_TARGET}}</td><td><span class="status-pill {{BOLLINGER_STATUS_CLASS}}">{{BOLLINGER_STATUS_LABEL}}</span></td><td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">base data</a></td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <div class="section-head">
-      <span class="section-num">LIVE</span>
-      <span class="section-title">Prediction market — Polymarket <span class="live-badge">GAMMA API · FREE, KEYLESS</span></span>
-      <span class="section-desc">Crowd probability, not a forecast — not scored in the verdict below, see the note underneath</span>
-    </div>
-    <table>
-      <thead><tr><th style="width:14%">Horizon</th><th style="width:38%">Market question</th><th style="width:16%">Yes odds</th><th style="width:14%">Resolves</th><th style="width:18%">Volume</th></tr></thead>
-      <tbody>
-        <tr>
-          <td class="ind-name">Weekly<br><span style="color:var(--text-faint)">(~7 days)</span></td>
-          <td class="desc">{{POLY_WEEKLY_QUESTION}}</td>
-          <td class="reading">{{POLY_WEEKLY_YES_LABEL}}: {{POLY_WEEKLY_YES_PCT}}%</td>
-          <td class="reading">{{POLY_WEEKLY_DATE}}</td>
-          <td class="reading">${{POLY_WEEKLY_VOLUME}}</td>
-        </tr>
-        <tr>
-          <td class="ind-name">Bi-weekly<br><span style="color:var(--text-faint)">(~14 days)</span></td>
-          <td class="desc">{{POLY_BIWEEKLY_QUESTION}}</td>
-          <td class="reading">{{POLY_BIWEEKLY_YES_LABEL}}: {{POLY_BIWEEKLY_YES_PCT}}%</td>
-          <td class="reading">{{POLY_BIWEEKLY_DATE}}</td>
-          <td class="reading">${{POLY_BIWEEKLY_VOLUME}}</td>
-        </tr>
-        <tr>
-          <td class="ind-name">Monthly<br><span style="color:var(--text-faint)">(~30 days)</span></td>
-          <td class="desc">{{POLY_MONTHLY_QUESTION}}</td>
-          <td class="reading">{{POLY_MONTHLY_YES_LABEL}}: {{POLY_MONTHLY_YES_PCT}}%</td>
-          <td class="reading">{{POLY_MONTHLY_DATE}}</td>
-          <td class="reading">${{POLY_MONTHLY_VOLUME}}</td>
-        </tr>
-        <tr>
-          <td class="ind-name">Quarterly<br><span style="color:var(--text-faint)">(~90 days)</span></td>
-          <td class="desc">{{POLY_QUARTERLY_QUESTION}}</td>
-          <td class="reading">{{POLY_QUARTERLY_YES_LABEL}}: {{POLY_QUARTERLY_YES_PCT}}%</td>
-          <td class="reading">{{POLY_QUARTERLY_DATE}}</td>
-          <td class="reading">${{POLY_QUARTERLY_VOLUME}}</td>
-        </tr>
-        <tr>
-          <td class="ind-name">Yearly<br><span style="color:var(--text-faint)">(~365 days)</span></td>
-          <td class="desc">{{POLY_YEARLY_QUESTION}}</td>
-          <td class="reading">{{POLY_YEARLY_YES_LABEL}}: {{POLY_YEARLY_YES_PCT}}%</td>
-          <td class="reading">{{POLY_YEARLY_DATE}}</td>
-          <td class="reading">${{POLY_YEARLY_VOLUME}}</td>
-        </tr>
-      </tbody>
-    </table>
-    <div class="master-note" style="margin-top:14px; padding:0 4px; font-size:12px;">
-      Whichever live BTC market on Polymarket falls closest to each horizon, picked automatically each day — the exact question text varies (a $-threshold, a range, etc.), since Polymarket doesn't offer fixed weekly/monthly contracts. Markets under $25,000 volume are skipped as too illiquid to trust. A "no match" row means no genuinely close BTC market currently exists at that horizon — shown honestly rather than forcing a bad match.
-      <strong style="color:var(--red);">This is a live crowd probability, not a forecast.</strong> Per your own uploaded research: these odds move with price rather than lead it, and have shown real overconfidence when price sits right at the threshold (a 91%-priced "$100k in November" market resolved NO in Nov 2024 when BTC missed by four days). Read as context, not signal.
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-head">
-      <span class="section-num">VERDICT</span>
-      <span class="section-title">Weighted synthesis across every indicator above</span>
-      <span class="section-desc">Mechanical tally, not a prediction — see disclaimer below</span>
-    </div>
-    <div class="master" style="border-color: var(--border);">
+  <div class="section" style="margin-top:32px;">
+    <div class="master">
       <div class="master-top">
         <div>
-          <div class="master-label">{{VERDICT_COUNT}} weighted-buy · {{VERDICT_PCT}}% of scored weight</div>
-          <div class="master-name">{{VERDICT_HEADLINE}}</div>
+          <div class="master-label">Master Signal</div>
+          <div class="master-name">Santostasi Bitcoin Power Law</div>
         </div>
+        <div class="master-status"><span class="dot"></span> CHECK MANUALLY</div>
       </div>
-      <div class="master-note">{{VERDICT_BODY}}</div>
-      <div class="master-note" style="margin-top:10px;">
-        <strong style="color:var(--text);">Flashing buy this run:</strong> {{VERDICT_BUY_LIST}}
-      </div>
-      <div class="master-note" style="margin-top:6px;">
-        <strong style="color:var(--text);">No scoreable reading this run ({{VERDICT_EXCLUDED_COUNT}}):</strong> {{VERDICT_EXCLUDED_LIST}} — <span style="color:var(--text-faint);">excluded from the count above, not counted as bearish. See the full breakdown below for all {{TOTAL_TRACKED_COUNT}} tracked indicators, including these.</span>
-      </div>
-      <div class="master-note" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border); font-size:12px;">
-        <strong style="color:var(--red);">This is a mechanical tally of the rows above, not financial advice and not a price prediction.</strong>
-        It cannot see your Power Law check — that stays the actual master signal, manual, and it overrides
-        everything here. Past patterns (the historical windows referenced above) are not guarantees of future
-        price action. Treat this as a faster way to read the board you already built, not a new source of
-        information.
-      </div>
+      <ul>
+        <li><strong>Veto power</strong> — overrides every indicator below. If this hasn't confirmed, the honest answer is "not yet," regardless of anything else on this page.</li>
+        <li><strong>Manual verification required</strong> — no free source replicates this model; check your own subscription directly and update this line yourself when it flashes.</li>
+      </ul>
     </div>
   </div>
 
   <div class="section">
     <div class="section-head">
-      <span class="section-num">WEIGHTED</span>
-      <span class="section-title">Full breakdown — all {{TOTAL_TRACKED_COUNT}} tracked indicators, heaviest to lightest</span>
-      <span class="section-desc">% = each indicator's true share of the total weight pool, not just today's scored subset</span>
+      <div class="section-num">§1 · LIVE — BGEOMETRICS</div>
+      <div class="section-title">Core Indicators</div>
+      <div class="section-sub">Fetched daily, full hourly free-tier quota. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> for methodology.</div>
     </div>
     <table>
-      <thead><tr><th style="width:36%">Indicator</th><th style="width:16%">Weight (% of all tracked)</th><th style="width:24%">Target</th><th style="width:24%">Status today</th></tr></thead>
+      <thead><tr><th style="width:30%">Indicator</th><th style="width:14%">Reading</th><th style="width:20%">Target</th><th style="width:16%">Status</th><th style="width:10%">Source</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="ind-name">MVRV Z-Score
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Market cap vs. realized cap, standardized against its own historical volatility. The most refined member of the "price vs. cost basis" family — highest weight on this board.</span></span>
+          </td>
+          <td class="reading">{{MVRV_Z}}</td>
+          <td class="target">{{MVRV_Z_TARGET}}</td>
+          <td><span class="status-pill {{MVRV_Z_STATUS_CLASS}}">{{MVRV_Z_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/mvrv.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Realized Price <span class="caveat">shown, not scored</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Average cost basis of every coin. <strong>Not counted in the weighted verdict</strong> — mathematically the un-normalized version of MVRV Z-Score (spot ÷ realized price IS the MVRV ratio), so scoring both would double-count one signal.</span></span>
+          </td>
+          <td class="reading">${{REALIZED_PRICE}}</td>
+          <td class="target">{{REALIZED_PRICE_TARGET}}</td>
+          <td><span class="status-pill {{REALIZED_PRICE_STATUS_CLASS}}">{{REALIZED_PRICE_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/realized_price_g.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Puell Multiple
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Daily miner issuance value vs. its 365-day average. Ties valuation to real mining economics — genuinely independent from the on-chain price-ratio cluster above.</span></span>
+          </td>
+          <td class="reading">{{PUELL}}</td>
+          <td class="target">{{PUELL_TARGET}}</td>
+          <td><span class="status-pill {{PUELL_STATUS_CLASS}}">{{PUELL_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/puell_multiple.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Reserve Risk
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Price relative to long-term holder conviction (accumulated coin-days vs. price). Thinner public track record than MVRV/Puell, hence a discounted weight.</span></span>
+          </td>
+          <td class="reading">{{RESERVE_RISK}}</td>
+          <td class="target">{{RESERVE_RISK_TARGET}}</td>
+          <td><span class="status-pill {{RESERVE_RISK_STATUS_CLASS}}">{{RESERVE_RISK_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/reserve_risk.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">LTH-SOPR
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Long-term holders spending at profit (&gt;1) or loss (&lt;1). A behavioral confirmation signal — tends to lag the actual low rather than lead it.</span></span>
+          </td>
+          <td class="reading">{{LTH_SOPR}}</td>
+          <td class="target">{{LTH_SOPR_TARGET}}</td>
+          <td><span class="status-pill {{LTH_SOPR_STATUS_CLASS}}">{{LTH_SOPR_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/lth_sopr.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Thermocap Multiple
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Market cap vs. cumulative miner revenue ever paid. No globally-agreed fixed threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older market — see README for the research behind this. Scored at reduced (Tier 3) weight until then.</span></span>
+          </td>
+          <td class="reading">{{THERMOCAP}}</td>
+          <td class="target">{{THERMOCAP_TARGET}}</td>
+          <td><span class="status-pill {{THERMOCAP_STATUS_CLASS}}">{{THERMOCAP_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bitbo.io/thermocap-multiple/" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Pi Cycle <span class="caveat">not scored</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Long-term moving-average crossover cycle marker. <strong>Not counted</strong> — it's a crossover event, not a continuous magnitude, so no percentile or fixed threshold applies. Also genuine uncertainty over whether this feed is the Top or Bottom variant.</span></span>
+          </td>
+          <td class="reading">{{PI_CYCLE}}</td>
+          <td class="target">{{PI_CYCLE_TARGET}}</td>
+          <td><span class="status-pill st-mid">CONTEXT ONLY</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/pi_cycle.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">NRPL
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Net Realized P&amp;L in BTC — realized profit minus realized loss; deeply negative means capitulation dominates. No fixed published threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older, smaller network — see README. Scored at reduced (Tier 3) weight until then.</span></span>
+          </td>
+          <td class="reading">{{NRPL}}</td>
+          <td class="target">{{NRPL_TARGET}}</td>
+          <td><span class="status-pill {{NRPL_STATUS_CLASS}}">{{NRPL_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/nrpl.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">% Supply in Loss
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Share of circulating BTC below cost basis (derived: 100 − Supply in Profit). The metric this whole project started from.</span></span>
+          </td>
+          <td class="reading">{{SUPPLY_LOSS}}%</td>
+          <td class="target">{{SUPPLY_LOSS_TARGET}}</td>
+          <td><span class="status-pill {{SUPPLY_LOSS_STATUS_CLASS}}">{{SUPPLY_LOSS_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://charts.bgeometrics.com/supply_in_profit.html" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">aSOPR <span class="caveat">modeled</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode's own published mechanism, not a raw substitute for the real metric.</span></span>
+          </td>
+          <td class="reading">{{ASOPR_EST}}</td>
+          <td class="target">{{ASOPR_EST_TARGET}}</td>
+          <td><span class="status-pill {{ASOPR_EST_STATUS_CLASS}}">{{ASOPR_EST_STATUS_LABEL}}</span></td>
+          <td class="ind-source">formula, see README</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">§2 · LIVE — COINGECKO + BLOCKCHAIN.COM</div>
+      <div class="section-title">Self-Computed Indicators</div>
+      <div class="section-sub">Built from raw free data, zero extra API cost. Formulas reconstructed, not licensed feeds — hover for method.</div>
+    </div>
+    <table>
+      <thead><tr><th style="width:30%">Indicator</th><th style="width:14%">Reading</th><th style="width:20%">Target</th><th style="width:16%">Status</th><th style="width:10%">Source</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="ind-name">Production Cost <span class="caveat">electricity-only</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Live hashrate/difficulty × Cambridge CBECI's $0.05/kWh assumption + 20 J/TH blended efficiency. Reads lower than "all-in" bank headlines (e.g. JPMorgan's ~$78K), which add hardware depreciation — different scope, not a contradiction.</span></span>
+          </td>
+          <td class="reading">${{PROD_COST}}<br><span class="caveat">({{PROD_COST_PCT}}% vs. spot)</span></td>
+          <td class="target">{{PROD_COST_TARGET}}</td>
+          <td><span class="status-pill {{PROD_COST_STATUS_CLASS}}">{{PROD_COST_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://ccaf.io/cbnsi/cbeci/methodology" target="_blank">methodology</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Mayer Multiple
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Price ÷ 200-day moving average. Simple, blunt, generic across any asset — lowest weight tier for that reason.</span></span>
+          </td>
+          <td class="reading">{{MAYER}}</td>
+          <td class="target">{{MAYER_TARGET}}</td>
+          <td><span class="status-pill {{MAYER_STATUS_CLASS}}">{{MAYER_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">data</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Drawdown Magnitude <span class="caveat">not scored</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">% below all-time high ($126,296, Oct 2025). <strong>Not counted</strong> — purely descriptive, tells you how far price fell, nothing about whether it's done falling.</span></span>
+          </td>
+          <td class="reading">{{DRAWDOWN}}%</td>
+          <td class="target">{{DRAWDOWN_TARGET}}</td>
+          <td><span class="status-pill st-mid">CONTEXT ONLY</span></td>
+          <td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">data</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Miner Capitulation <span class="caveat">Hash Ribbons</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Charles Edwards' full original methodology: 30d/60d hashrate MA cross for capitulation/recovery, confirmed by 10d/20d price MA momentum for the real buy signal — not just the raw hashrate spread.</span></span>
+          </td>
+          <td class="reading">{{MINER_CAP_STATE}}<br><span class="caveat">({{MINER_CAP}}% spread)</span></td>
+          <td class="target">{{MINER_CAP_TARGET}}</td>
+          <td><span class="status-pill {{MINER_CAP_STATUS_CLASS}}">{{MINER_CAP_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://capriole.com/hash-ribbons-bitcoin-bottoms/" target="_blank">method</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">NVT Golden Cross
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Exact CryptoQuant formula: 10d/30d MA spread of Market Cap ÷ Tx Volume, standardized as a z-score against its own 300-day volatility. &gt;2.2 overpriced, &lt;−1.6 bottom zone.</span></span>
+          </td>
+          <td class="reading">{{NVT_GC}}</td>
+          <td class="target">{{NVT_GC_TARGET}}</td>
+          <td><span class="status-pill {{NVT_GC_STATUS_CLASS}}">{{NVT_GC_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://userguide.cryptoquant.com/cryptoquant-metrics/network/nvt-golden-cross" target="_blank">method</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Fear &amp; Greed
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Composite sentiment score. Genuine contrarian signal, but can sit at extremes for months — good color, weak standalone trigger.</span></span>
+          </td>
+          <td class="reading">{{FNG}} ({{FNG_LABEL}})</td>
+          <td class="target">{{FNG_TARGET}}</td>
+          <td><span class="status-pill {{FNG_STATUS_CLASS}}">{{FNG_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://alternative.me/crypto/fear-and-greed-index/" target="_blank">view</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">MACD <span class="caveat">weekly, 12/26/9</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Trend-following crossover — a bullish histogram flip has historically flagged major reversals, including Dec 2022.</span></span>
+          </td>
+          <td class="reading">{{MACD}}<br><span class="caveat">cross: {{MACD_CROSSED}}</span></td>
+          <td class="target">{{MACD_TARGET}}</td>
+          <td><span class="status-pill {{MACD_STATUS_CLASS}}">{{MACD_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">data</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Weekly RSI <span class="caveat">14-period</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Classic oversold oscillator — generic across any asset, can stay pinned for months in a strong downtrend.</span></span>
+          </td>
+          <td class="reading">{{RSI}}</td>
+          <td class="target">{{RSI_TARGET}}</td>
+          <td><span class="status-pill {{RSI_STATUS_CLASS}}">{{RSI_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">data</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Bollinger %B <span class="caveat">20-week, 2σ</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Where price sits in its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal.</span></span>
+          </td>
+          <td class="reading">{{BOLLINGER}}</td>
+          <td class="target">{{BOLLINGER_TARGET}}</td>
+          <td><span class="status-pill {{BOLLINGER_STATUS_CLASS}}">{{BOLLINGER_STATUS_LABEL}}</span></td>
+          <td class="ind-source"><a href="https://www.coingecko.com/en/coins/bitcoin" target="_blank">data</a></td>
+        </tr>
+        <tr>
+          <td class="ind-name">Cycle Rhythm <span class="caveat">1064/364-day, not scored</span>
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Calendar-only projection. <strong>Not counted</strong> — a date, not a threshold. Already broke once on the last cycle leg (376–381 vs. claimed 364 days).</span></span>
+          </td>
+          <td class="reading">{{DAYS_SINCE_TOP}}d since top</td>
+          <td class="target">proj. {{PROJECTED_BOTTOM}}</td>
+          <td><span class="status-pill st-mid">CONTEXT ONLY</span></td>
+          <td class="ind-source">pure date math</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">§3 · LIVE — POLYMARKET GAMMA API</div>
+      <div class="section-title">Prediction Market</div>
+      <div class="section-sub">Crowd probability, not a forecast — deliberately not scored in §4. Hover for the caveat.</div>
+    </div>
+    <table>
+      <thead><tr><th style="width:14%">Horizon</th><th style="width:42%">Market Question</th><th style="width:16%">Yes Odds</th><th style="width:14%">Resolves</th><th style="width:14%">Volume</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="ind-name">Weekly
+            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">This is a live crowd probability, not a forecast — it moves with price rather than leading it, and has shown real overconfidence right at a threshold (a 91%-priced "$100k by November" market still resolved NO in 2024).</span></span>
+          </td>
+          <td>{{POLY_WEEKLY_QUESTION}}</td>
+          <td class="reading">{{POLY_WEEKLY_YES_LABEL}}: {{POLY_WEEKLY_YES_PCT}}%</td>
+          <td class="target">{{POLY_WEEKLY_DATE}}</td>
+          <td class="target">${{POLY_WEEKLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Bi-weekly</td>
+          <td>{{POLY_BIWEEKLY_QUESTION}}</td>
+          <td class="reading">{{POLY_BIWEEKLY_YES_LABEL}}: {{POLY_BIWEEKLY_YES_PCT}}%</td>
+          <td class="target">{{POLY_BIWEEKLY_DATE}}</td>
+          <td class="target">${{POLY_BIWEEKLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Monthly</td>
+          <td>{{POLY_MONTHLY_QUESTION}}</td>
+          <td class="reading">{{POLY_MONTHLY_YES_LABEL}}: {{POLY_MONTHLY_YES_PCT}}%</td>
+          <td class="target">{{POLY_MONTHLY_DATE}}</td>
+          <td class="target">${{POLY_MONTHLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Quarterly</td>
+          <td>{{POLY_QUARTERLY_QUESTION}}</td>
+          <td class="reading">{{POLY_QUARTERLY_YES_LABEL}}: {{POLY_QUARTERLY_YES_PCT}}%</td>
+          <td class="target">{{POLY_QUARTERLY_DATE}}</td>
+          <td class="target">${{POLY_QUARTERLY_VOLUME}}</td>
+        </tr>
+        <tr>
+          <td class="ind-name">Yearly</td>
+          <td>{{POLY_YEARLY_QUESTION}}</td>
+          <td class="reading">{{POLY_YEARLY_YES_LABEL}}: {{POLY_YEARLY_YES_PCT}}%</td>
+          <td class="target">{{POLY_YEARLY_DATE}}</td>
+          <td class="target">${{POLY_YEARLY_VOLUME}}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="table-source-line">Auto-matched daily to whichever live BTC market falls closest to each horizon · $25,000 minimum volume · "no match" shown honestly rather than forced</div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">§4 · WEIGHTED SYNTHESIS</div>
+      <div class="section-title">Full Rank &amp; Weight</div>
+      <div class="section-sub">Every tracked indicator, ranked. Power Law holds veto power and sits outside the weight pool by design.</div>
+    </div>
+    <table>
+      <thead><tr><th style="width:6%">#</th><th style="width:34%">Indicator</th><th style="width:14%">Weight</th><th style="width:26%">Target</th><th style="width:20%">Status Today</th></tr></thead>
       <tbody>
         {{FULL_WEIGHTED_BREAKDOWN_ROWS}}
       </tbody>
     </table>
+    <div class="table-source-line">{{TOTAL_TRACKED_COUNT}} indicators tracked in total · weight % is share of the scoreable pool only, recalculated fresh each run</div>
   </div>
 
   <div class="section">
     <div class="section-head">
-      <span class="section-num">MANUAL</span>
-      <span class="section-title">No free source, and no reasonable proxy either</span>
-      <span class="section-desc">Down to 1 — aSOPR now has a modeled estimate above; this is the last true gap</span>
+      <div class="section-num">§5 · DISCUSSION</div>
+      <div class="section-title">What Today's Reading Means</div>
     </div>
-    <table>
-      <thead><tr><th style="width:22%">Indicator</th><th style="width:48%">Where to check</th><th style="width:30%">Reading</th></tr></thead>
-      <tbody>
-        <tr><td class="ind-name">Whale accumulation / exchange netflow</td><td class="ind-source"><a href="https://cryptoquant.com" target="_blank">CryptoQuant free tier</a></td><td class="reading">manual</td></tr>
-      </tbody>
-    </table>
+    <div class="discussion">
+      <strong>Where things stand:</strong> {{VERDICT_COUNT}} of today's scoreable indicators are buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong>Power Law has not confirmed</strong> — nothing above substitutes for that.
+      <br><br>
+      {{VERDICT_BODY}}
+      <br><br>
+      Flashing buy this run: {{VERDICT_BUY_LIST}}.
+      <div class="fine-print">
+        <strong>This is a mechanical tally, not financial advice or a price prediction.</strong> It cannot see your Power Law check, which overrides everything above. Past patterns are not guarantees of future price action.
+      </div>
+    </div>
   </div>
 
   <footer>
-    <div class="footer-grid">
-      <div>
-        <div class="footer-title">How the automation works</div>
-        <div class="footer-body">GitHub Actions runs update_dashboard.py once a day, pulling fresh values from BGeometrics' free API tier (8 requests, its full hourly allowance) plus Alternative.me for sentiment, then rebuilds this page and publishes it to your GitHub Pages URL. Nothing to run manually. Thresholds in the script are illustrative starting points — tune them in update_dashboard.py as your own conviction develops.</div>
-      </div>
-      <div>
-        <div class="footer-title">Sharing with your brother</div>
-        <div class="footer-body">Once GitHub Pages is enabled, this dashboard lives at a public URL (e.g. yourname.github.io/btc-dashboard). Send him that one link — it always shows the latest auto-fetched numbers, no file to re-send.</div>
-      </div>
-    </div>
-    <div class="updated">Auto-rebuilt: {{LAST_UPDATED}}</div>
+    Rebuilt daily via GitHub Actions from BGeometrics, CoinGecko, Blockchain.com, Alternative.me, and Polymarket — all free tiers.
+    <div class="manual-line">Not automatable — no free source exists: <strong>Whale accumulation / exchange netflow</strong> (<a href="https://cryptoquant.com" target="_blank">CryptoQuant</a>).</div>
   </footer>
 
 </div>

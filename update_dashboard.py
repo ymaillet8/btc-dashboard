@@ -106,6 +106,73 @@ def cache_store(cache, key, value):
     if value is not None:
         cache[key] = {"value": value, "date": datetime.now(timezone.utc).isoformat()}
 
+
+# ---------------------------------------------------------------------------
+# Rolling-history percentile thresholds. Grounded in real research, not
+# invented: a fixed historical-cycle-analog number (e.g. "NRPL <= -800,000
+# BTC, per 2018/2022") is anchored to a smaller, structurally different
+# network — Bitcoin's realized cap and on-chain activity have grown since,
+# so an absolute threshold from a prior cycle isn't the same statistical
+# statement today. A peer-reviewed paper (Grobys et al., Research in
+# International Business and Finance, 2026) confirms there's no
+# universally accepted rule for these thresholds in the first place, and a
+# documented model ("Bitcoin Barometer," validated blind against 16
+# historical cycle events at 94% accuracy) uses percentile scoring against
+# an indicator's OWN historical distribution specifically to avoid
+# anchoring to an earlier market structure. This does the same thing,
+# self-normalizing rather than using a fixed number, using the same daily
+# cache this dashboard already builds — zero extra API cost.
+#
+# Honest limitation, stated plainly: this starts with zero history and
+# needs real time to become meaningful. MIN_HISTORY_DAYS below is the
+# bootstrap gate — below that many accumulated daily points, the
+# indicator stays excluded (N/A) exactly as before, rather than trusting
+# a percentile computed from too few observations.
+HISTORY_MAX_LEN = 200       # cap stored history length (keeps the cache file small)
+MIN_HISTORY_DAYS = 90       # minimum accumulated points before trusting a computed percentile
+PERCENTILE_CUTOFF = 10      # bottom 10th percentile of trailing history = buy-favorable
+
+
+def history_append(cache, key, value):
+    """Append today's value to this token's rolling history, trimmed to
+    HISTORY_MAX_LEN. Separate from cache_store()'s single last-known-good
+    value — this list is what percentile thresholds get computed from."""
+    if value is None:
+        return
+    hist_key = f"{key}__history"
+    entry = cache.get(hist_key, {"values": []})
+    try:
+        entry["values"].append(float(value))
+    except (TypeError, ValueError):
+        return
+    entry["values"] = entry["values"][-HISTORY_MAX_LEN:]
+    cache[hist_key] = entry
+
+
+def compute_percentile(values, pct):
+    """Simple, dependency-free percentile (linear interpolation between
+    closest ranks) — avoids requiring numpy for one calculation."""
+    if not values:
+        return None
+    s = sorted(values)
+    k = (len(s) - 1) * (pct / 100)
+    f, c = int(k), min(int(k) + 1, len(s) - 1)
+    if f == c:
+        return s[f]
+    return s[f] + (s[c] - s[f]) * (k - f)
+
+
+def rolling_threshold(cache, key):
+    """Returns (threshold, n_points) if enough history has accumulated to
+    trust a computed percentile, else (None, n_points) so callers can show
+    honest accumulation progress even before the gate is met."""
+    hist_key = f"{key}__history"
+    values = cache.get(hist_key, {}).get("values", [])
+    n = len(values)
+    if n < MIN_HISTORY_DAYS:
+        return None, n
+    return compute_percentile(values, PERCENTILE_CUTOFF), n
+
 # token -> (endpoint slug [best guess, unverified], direction, threshold)
 BG_METRICS = {
     "MVRV_Z":        ("mvrv-zscore",      "low",  0.0),
@@ -866,16 +933,17 @@ WEIGHT_MAP = {
     # (spot/realized price IS the raw MVRV ratio; the Z-score is that same
     # ratio standardized against its own volatility) — scoring both would
     # double-count one underlying signal. Still fetched, still displayed
-    # with its own real BUY ZONE/NOT YET status (genuinely useful to see
-    # the raw dollar comparison), just excluded from the weighted verdict
-    # tally. Same "displayed, not scored" treatment as Thermocap and Pi
-    # Cycle below, for a different reason (those two have no defensible
-    # fixed threshold at all; this one has a real threshold but is
-    # redundant with an already-scored indicator).
+    # with its own real BUY ZONE/NOT YET status, just excluded from the
+    # weighted verdict tally.
     "RESERVE_RISK": 2.5,
     # Tier 2 — solid on-chain (weight 2)
-    "THERMOCAP": 2, "LTH_SOPR": 2, "NVT_GC": 2,
-    "PI_CYCLE": 2, "ASOPR_EST": 2,
+    # NOTE: Thermocap and Pi Cycle are also intentionally NOT in this dict
+    # (moved out in v15) — they never actually score (no defensible fixed
+    # threshold exists for either), so leaving them in WEIGHT_MAP was
+    # inconsistent: it inflated the total weight pool's denominator with
+    # weight that could never be earned. Same treatment as NRPL, Drawdown,
+    # and Cycle Rhythm now — displayed, ranked, explicitly N/A on weight.
+    "LTH_SOPR": 2, "NVT_GC": 2, "ASOPR_EST": 2,
     "PROD_COST": 2.5,
     # Tier 3 — behavioral/technical (weight 1.5)
     "MINER_CAP": 1.5, "MACD": 1.5,
@@ -897,7 +965,8 @@ DISPLAY_NAMES = {
     "SUPPLY_LOSS": "% Supply in Loss", "ASOPR_EST": "aSOPR (modeled)",
     "MINER_CAP": "Miner Capitulation", "MACD": "MACD (weekly)",
     "MAYER": "Mayer Multiple", "RSI": "Weekly RSI", "FNG": "Fear & Greed",
-    "BOLLINGER": "Bollinger %B",
+    "BOLLINGER": "Bollinger %B", "CYCLE_RHYTHM": "1064/364-Day Cycle Rhythm",
+    "DRAWDOWN": "Drawdown Magnitude",
 }
 
 
@@ -958,39 +1027,81 @@ def target_for(token):
     return TARGET_LABELS.get(token, "\u2014")
 
 
-TOTAL_POSSIBLE_WEIGHT = sum(WEIGHT_MAP.values())
+# Full rank order, matching the original ranked analysis from early in this
+# project (Power Law first, everything else in the same priority order
+# established then) — this is the single reference used to build the rank
+# table below, so a token's position here IS its rank, whether or not it
+# actually carries scoreable weight.
+MASTER_RANK_ORDER = [
+    "MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
+    "LTH_SOPR", "PI_CYCLE", "PROD_COST", "NRPL", "ASOPR_EST", "NVT_GC",
+    "MINER_CAP", "MACD", "SUPPLY_LOSS", "MAYER", "RSI", "FNG", "BOLLINGER",
+    "DRAWDOWN", "CYCLE_RHYTHM",
+]
+
+# Short, one-line reasons for every indicator that can never contribute a
+# scored vote — shown as a bullet under its row instead of a percentage.
+EXCLUSION_REASONS = {
+    "REALIZED_PRICE": "Redundant — same core ratio as MVRV Z-Score, just un-normalized",
+    "THERMOCAP": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
+    "PI_CYCLE": "A crossover event, not a continuous magnitude — plus uncertainty over Top vs. Bottom variant",
+    "NRPL": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
+    "DRAWDOWN": "Descriptive by nature — a % fallen, not a level to cross",
+    "CYCLE_RHYTHM": "A calendar date, not a threshold — nothing to score",
+}
 
 
 def build_full_weighted_breakdown(values):
-    """Every indicator in WEIGHT_MAP, sorted heaviest to lightest, with its
-    true share of the TOTAL weight pool (not just the weight of whatever
-    happened to fire today) — this is the fix for the old "3/6" framing,
-    which only counted indicators that had a scoreable reading this
-    specific run and made the tracked list look much smaller than it is.
-    Returns a ready-to-insert HTML string, since the row count and status
-    mix changes every day."""
+    """One unified, ranked table: Power Law at rank 1 (veto power, not a
+    percentage), then every tracked indicator in MASTER_RANK_ORDER below
+    it. Indicators with real scoreable weight show their true share of the
+    total pool; indicators that can never score show N/A plus a one-line
+    reason. Returns a ready-to-insert HTML string, since the day-to-day
+    status mix changes every run."""
     rows = []
-    for token, weight in sorted(WEIGHT_MAP.items(), key=lambda kv: kv[1], reverse=True):
-        name = DISPLAY_NAMES.get(token, token)
-        pct_of_total = round((weight / TOTAL_POSSIBLE_WEIGHT) * 100, 1)
-        css = values.get(f"{token}_STATUS_CLASS")
-        label = values.get(f"{token}_STATUS_LABEL", "CHECK")
-        if css == "st-buy":
-            status_text, status_css = "BUY-FAVORABLE", "st-buy"
-        elif css == "st-no":
-            status_text, status_css = "NOT YET", "st-no"
-        elif label and label.startswith("STALE"):
-            status_text, status_css = label, "st-mid"
-        else:
-            status_text, status_css = "NO SCOREABLE READING TODAY", "st-mid"
 
+    # Rank 1 — Power Law, always first, never part of the weight pool.
+    rows.append(
+        '<tr class="rank-veto"><td class="rank-num">1</td>'
+        '<td class="ind-name">Santostasi Power Law</td>'
+        '<td class="reading">VETO</td>'
+        '<td class="target">Lower band touch (manual)</td>'
+        '<td><span class="status-pill" style="background:rgba(96,165,250,.15); color:var(--blue);">MASTER SIGNAL</span></td></tr>'
+    )
+
+    for i, token in enumerate(MASTER_RANK_ORDER, start=2):
+        name = DISPLAY_NAMES.get(token, token)
         target = values.get(f"{token}_TARGET", "—")
-        rows.append(
-            f'<tr><td class="ind-name">{name}</td>'
-            f'<td class="reading">{pct_of_total}%</td>'
-            f'<td class="target">{target}</td>'
-            f'<td><span class="status-pill {status_css}">{status_text}</span></td></tr>'
-        )
+
+        if token in WEIGHT_MAP:
+            weight = WEIGHT_MAP[token]
+            pct_of_total = round((weight / sum(WEIGHT_MAP.values())) * 100, 1)
+            reading = f"{pct_of_total}%"
+            css = values.get(f"{token}_STATUS_CLASS")
+            label = values.get(f"{token}_STATUS_LABEL", "CHECK")
+            if css == "st-buy":
+                status_text, status_css = "BUY-FAVORABLE", "st-buy"
+            elif css == "st-no":
+                status_text, status_css = "NOT YET", "st-no"
+            elif label and label.startswith("STALE"):
+                status_text, status_css = label, "st-mid"
+            else:
+                status_text, status_css = "NO READING TODAY", "st-mid"
+            rows.append(
+                f'<tr><td class="rank-num">{i}</td><td class="ind-name">{name}</td>'
+                f'<td class="reading">{reading}</td>'
+                f'<td class="target">{target}</td>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span></td></tr>'
+            )
+        else:
+            reason = EXCLUSION_REASONS.get(token, "Not currently scored")
+            rows.append(
+                f'<tr class="rank-na"><td class="rank-num">{i}</td>'
+                f'<td class="ind-name">{name}<div class="na-reason">{reason}</div></td>'
+                f'<td class="reading">N/A</td>'
+                f'<td class="target">{target}</td>'
+                f'<td><span class="status-pill st-mid">NOT SCORED</span></td></tr>'
+            )
     return "\n".join(rows)
 
 
@@ -1081,6 +1192,35 @@ def main():
         values[f"{token}_STATUS_CLASS"] = css
         values[f"{token}_TARGET"] = target_for(token)
         print(f"  {token} ({slug}): {values[token]} -> {label}")
+
+    # Rolling-percentile thresholds for Thermocap and NRPL — see the long
+    # comment above rolling_threshold() for the research this is grounded
+    # in. Pi Cycle deliberately isn't included here: it's a moving-average
+    # crossover event, not a continuous magnitude, so percentile scoring
+    # doesn't apply to it the same way — a different limitation, not one
+    # this technique fixes, so it correctly stays excluded regardless.
+    PERCENTILE_ELIGIBLE = ("THERMOCAP", "NRPL")
+    for token in PERCENTILE_ELIGIBLE:
+        fresh_val = values.get(token)
+        # Only feed genuinely fresh fetches into the history — a stale
+        # cache-fallback value repeated into the distribution would distort
+        # the percentile calculation with a duplicate, not a new
+        # observation.
+        was_fresh_fetch = not str(values.get(f"{token}_STATUS_LABEL", "")).startswith("STALE")
+        if fresh_val is not None and was_fresh_fetch:
+            history_append(cache, token, fresh_val)
+
+        threshold, n_points = rolling_threshold(cache, token)
+        if threshold is not None and fresh_val is not None:
+            label, css = status_pill(fresh_val, "low", threshold)
+            values[f"{token}_STATUS_LABEL"] = label
+            values[f"{token}_STATUS_CLASS"] = css
+            values[f"{token}_TARGET"] = f"\u2264 {round(threshold, 2)} (live, {PERCENTILE_CUTOFF}th pct. of trailing {n_points}d)"
+            WEIGHT_MAP[token] = 1.5  # Tier 3: real and self-computed, but not yet full-cycle-validated
+            print(f"  {token}: rolling {PERCENTILE_CUTOFF}th percentile threshold = {round(threshold, 2)} (n={n_points}) -> {label}")
+        else:
+            values[f"{token}_TARGET"] = f"N/A \u2014 building history ({n_points}/{MIN_HISTORY_DAYS} days)"
+            print(f"  {token}: only {n_points}/{MIN_HISTORY_DAYS} days of history accumulated, staying N/A")
 
     # Supply in Loss = 100 - Supply in Profit (BGeometrics only exposes the
     # profit side under this slug guess; the loss framing is the one your
@@ -1257,6 +1397,7 @@ def main():
     values["DAYS_SINCE_TOP"] = days_since_top
     values["PROJECTED_BOTTOM"] = projected_bottom
     values["DAYS_TO_PROJECTED"] = days_to_projected
+    values["CYCLE_RHYTHM_TARGET"] = "N/A — date, not a level"
     print(f"  {days_since_top} days since last cycle top, projected bottom {projected_bottom} ({days_to_projected} days away)")
 
     values["LAST_UPDATED"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -1286,7 +1427,7 @@ def main():
 
     print("Building weighted verdict synthesis...")
     values["FULL_WEIGHTED_BREAKDOWN_ROWS"] = build_full_weighted_breakdown(values)
-    values["TOTAL_TRACKED_COUNT"] = len(WEIGHT_MAP)
+    values["TOTAL_TRACKED_COUNT"] = len(MASTER_RANK_ORDER) + 1  # +1 for Power Law, always rank 1
     verdict = build_verdict(values)
     values.update(verdict)
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")
