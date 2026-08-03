@@ -530,36 +530,128 @@ HORIZONS = {
 }
 MIN_VOLUME_USD = 25_000  # ignore illiquid/noise markets below this
 
+# Short-interval "will BTC be up or down in the next 15m/1h/4h" markets are
+# created continuously (Polymarket spins up a fresh one every interval) and
+# their end dates never land anywhere near our weekly-through-yearly
+# horizons anyway — but on an unsorted page they can make up the bulk of
+# the events returned, crowding out the much rarer longer-dated markets we
+# actually want. Filtered out by slug pattern before any horizon matching.
+_SHORT_INTERVAL_SLUG_MARKERS = ("-updown-", "-up-or-down-", "up-or-down-in-the-next")
+
+
+def _is_short_interval_market(title, slug):
+    haystack = f"{title} {slug}".lower()
+    return any(marker in haystack for marker in _SHORT_INTERVAL_SLUG_MARKERS)
+
 
 def fetch_polymarket_btc_events():
-    """One fetch, sorted by volume, filtered client-side for Bitcoin/BTC
-    markets — the Gamma API has no free-text search (a ?q= param is
-    silently ignored), so this is the correct approach, not a shortcut.
+    """Filtered client-side for Bitcoin/BTC markets — the Gamma API has no
+    free-text search that works reliably against this event list (a ?q=
+    param is silently ignored on /events), so this is the correct
+    approach, not a shortcut.
 
-    Returns (events, fetch_succeeded). fetch_succeeded=False means the
-    request itself failed (network error, bad response shape) — distinct
+    HONESTY NOTE (fixed after the dashboard shipped 100% "no liquid market
+    found" for every horizon, then re-verified before this fix shipped —
+    the first diagnosis of this bug was partly wrong and worth being
+    upfront about):
+
+    A prior fix attempt claimed "order=volume was wrong, Polymarket's docs
+    use order=volume24hr." That claim doesn't hold up: Polymarket's own
+    official GitHub examples repo (github.com/Polymarket/agent-skills)
+    documents the valid /events sort values as volume_24hr, volume,
+    liquidity, start_date, end_date, competitive, closed_time — meaning
+    "volume" alone was already a valid, real sort value the whole time,
+    and "volume24hr" (no underscore) isn't in that documented list at all.
+    So that specific "fix" likely wouldn't have changed anything.
+
+    The actual, verified fix: Polymarket has an official Crypto category
+    tag (tag_id=21, confirmed via Polymarket's own safe-wallet-integration
+    GitHub repo) that lets the API filter server-side for crypto-relevant
+    events, instead of scanning hundreds of generic events (most of which
+    are sports/politics/etc, not crypto) and hoping enough Bitcoin ones
+    turn up in a fixed-size page. Combined with the confirmed-real
+    short-interval slug pattern "btc-updown-{interval}-{timestamp}"
+    (Grokipedia's Gamma API writeup, cross-referenced against Polymarket's
+    own API guide) for filtering those out before matching, this should
+    reliably surface the actual weekly/monthly/quarterly/yearly markets
+    regardless of whatever the API's default/sort ordering happens to be —
+    since the matching logic below scans every returned candidate itself
+    rather than trusting page order, sort-parameter correctness was never
+    actually load-bearing for this function's correctness in the first
+    place.
+
+    Uses the documented keyset pagination endpoint (confirmed via
+    docs.polymarket.com's own OpenAPI spec, including the exact
+    next_cursor/after_cursor field names used below) with the tag_id=21
+    filter, paging through multiple batches for full coverage. Falls back
+    to the legacy flat /events endpoint (also tag_id=21-filtered) if the
+    keyset endpoint's shape ever changes — belt and suspenders rather than
+    a single fragile assumption.
+
+    Returns (events, fetch_succeeded). fetch_succeeded=False means every
+    fetch attempt failed (network error, bad response shape) — distinct
     from a successful request that just happened to find zero BTC events,
     which is a legitimate (if unlikely) outcome, not a failure to fall
     back from."""
-    url = f"{POLYMARKET_BASE}/events?active=true&closed=false&limit=300&order=volume&ascending=false"
-    try:
-        data = _get_json(url, headers={"User-Agent": "btc-dashboard-bot/1.0"})
-    except Exception as e:
-        print(f"  ! Polymarket fetch failed: {e}")
-        return [], False
+    MAX_PAGES = 6
+    PAGE_LIMIT = 100
+    CRYPTO_TAG_ID = 21  # confirmed via Polymarket/safe-wallet-integration (github.com/Polymarket)
+    all_events = []
+    cursor = None
+    fetched_any_page = False
 
-    if not isinstance(data, list):
-        print("  ! Polymarket returned an unexpected shape, skipping")
-        return [], False
+    for _ in range(MAX_PAGES):
+        url = f"{POLYMARKET_BASE}/events/keyset?active=true&closed=false&tag_id={CRYPTO_TAG_ID}&limit={PAGE_LIMIT}"
+        if cursor:
+            url += f"&after_cursor={cursor}"
+        try:
+            data = _get_json(url, headers={"User-Agent": "btc-dashboard-bot/1.0"})
+        except Exception as e:
+            print(f"  ! Polymarket keyset fetch failed: {e}")
+            break
+
+        fetched_any_page = True
+        page_events = data.get("events") if isinstance(data, dict) else None
+        if page_events is None:
+            print("  ! Polymarket keyset response missing 'events', stopping pagination")
+            break
+
+        all_events.extend(page_events)
+        cursor = data.get("next_cursor")
+        if not cursor or not page_events:
+            break
+
+    if not fetched_any_page or not all_events:
+        # Fall back to the legacy flat endpoint, same tag_id filter —
+        # kept only as a safety net, not the primary path. Deliberately
+        # omits the order param: it's not load-bearing for correctness
+        # here (see docstring), and its exact valid spelling is genuinely
+        # ambiguous across Polymarket's own documentation.
+        legacy_url = f"{POLYMARKET_BASE}/events?active=true&closed=false&tag_id={CRYPTO_TAG_ID}&limit=300"
+        try:
+            data = _get_json(legacy_url, headers={"User-Agent": "btc-dashboard-bot/1.0"})
+            if isinstance(data, list):
+                all_events = data
+            else:
+                print("  ! Polymarket legacy fallback returned an unexpected shape too")
+                return [], False
+        except Exception as e:
+            print(f"  ! Polymarket legacy fallback also failed: {e}")
+            return [], (fetched_any_page and not all_events)  # honest: True only if we got a valid-but-empty page
 
     btc_events = []
-    for event in data:
+    for event in all_events:
         title = (event.get("title") or event.get("question") or "")
         slug = event.get("slug") or ""
         haystack = f"{title} {slug}".lower()
         if "bitcoin" not in haystack and "btc" not in haystack:
             continue
+        if _is_short_interval_market(title, slug):
+            continue
         btc_events.append(event)
+
+    print(f"  Polymarket: scanned {len(all_events)} events across pagination, "
+          f"kept {len(btc_events)} non-short-interval BTC/Bitcoin events")
     return btc_events, True
 
 
@@ -809,6 +901,63 @@ DISPLAY_NAMES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Target values — the number each indicator needs to reach to flip to a buy
+# signal. Wherever a real numeric threshold already drives status_pill()
+# above, that SAME number is reused here verbatim (single source of truth —
+# never a second, possibly-drifting copy). For the four indicators that have
+# never had a scored threshold (Thermocap, Pi Cycle, NRPL, Drawdown), these
+# are new additions, each sourced as follows:
+#
+#   THERMOCAP  (Market Cap / Thermocap ratio): checkonchain/Bitcoin Magazine
+#   Pro historical charts put every past cycle bottom in the ~1-4x range,
+#   with each successive cycle's floor landing lower as the denominator
+#   (cumulative miner revenue) grows faster than any single drawdown can
+#   compress it. "<= 4" is a round, conservative read of that historical
+#   band — illustrative, not a fixed threshold anyone formally publishes.
+#
+#   PI_CYCLE: the real Pi Cycle Bottom indicator (Philip Swift) is a
+#   crossover — 471-day SMA x 0.745 falling below the 150-day SMA — not a
+#   level a single number can cross. No target number is defensible; the
+#   dashboard says so rather than inventing one.
+#
+#   NRPL (Net Realized P&L, BTC): your own uploaded forecaster-track-record
+#   research cites 2022's bottom flushing ~1.2M BTC in realized losses, and
+#   2018's flushed roughly 800K BTC (Glassnode's Week 30 2022 review of both
+#   cycles). Using the SMALLER of the two prior cycle bottoms as the more
+#   conservative anchor: target <= -800,000 BTC. A historical-analog
+#   estimate, not a published fixed threshold — flagged as such on the page.
+#
+#   DRAWDOWN MAGNITUDE: past major BTC drawdowns bottomed around -83% (Nov
+#   2018) and -77% (Nov 2022), each measured peak-to-trough on daily closes
+#   (widely cited, e.g. via CoinGecko/Glassnode cycle retrospectives).
+#   Shown as a descriptive historical range, explicitly not scored.
+# ---------------------------------------------------------------------------
+TARGET_LABELS = {
+    "MVRV_Z":        "\u2264 0.0",
+    "PUELL":         "\u2264 0.5",
+    "RESERVE_RISK":  "\u2264 0.002",
+    "LTH_SOPR":      "\u2264 1.0",
+    "ASOPR_EST":     "\u2264 1.0",
+    "SUPPLY_LOSS":   "\u2265 50%",
+    "MAYER":         "\u2264 1.0",
+    "NVT_GC":        "< \u22121.6 (z-score)",
+    "FNG":           "\u2264 20 (Extreme Fear)",
+    "MACD":          "histogram crosses \u2265 0",
+    "RSI":           "\u2264 30 (oversold)",
+    "BOLLINGER":     "\u2264 0.2 (near lower band)",
+    "THERMOCAP":     "\u2264 ~4x (illustrative \u2014 no fixed published threshold)",
+    "PI_CYCLE":      "N/A \u2014 MA crossover event, not a level",
+    "NRPL":          "\u2264 \u2212800,000 BTC (2018/2022 bottom analog, illustrative)",
+    "DRAWDOWN":      "\u221277% to \u221283% (past cycle-bottom range, descriptive only)",
+    "MINER_CAP":     "Hash Ribbons \u201cBUY SIGNAL\u201d state (recovery + price MA confirmed)",
+}
+
+
+def target_for(token):
+    return TARGET_LABELS.get(token, "\u2014")
+
+
 TOTAL_POSSIBLE_WEIGHT = sum(WEIGHT_MAP.values())
 
 
@@ -835,9 +984,11 @@ def build_full_weighted_breakdown(values):
         else:
             status_text, status_css = "NO SCOREABLE READING TODAY", "st-mid"
 
+        target = values.get(f"{token}_TARGET", "—")
         rows.append(
             f'<tr><td class="ind-name">{name}</td>'
             f'<td class="reading">{pct_of_total}%</td>'
+            f'<td class="target">{target}</td>'
             f'<td><span class="status-pill {status_css}">{status_text}</span></td></tr>'
         )
     return "\n".join(rows)
@@ -928,6 +1079,7 @@ def main():
                 label, css = "CHECK", "st-mid"
         values[f"{token}_STATUS_LABEL"] = label
         values[f"{token}_STATUS_CLASS"] = css
+        values[f"{token}_TARGET"] = target_for(token)
         print(f"  {token} ({slug}): {values[token]} -> {label}")
 
     # Supply in Loss = 100 - Supply in Profit (BGeometrics only exposes the
@@ -951,6 +1103,7 @@ def main():
     else:
         label, css = status_pill(supply_loss_val, "high", 50.0)
     values["SUPPLY_LOSS_STATUS_LABEL"], values["SUPPLY_LOSS_STATUS_CLASS"] = label, css
+    values["SUPPLY_LOSS_TARGET"] = target_for("SUPPLY_LOSS")
     print(f"  SUPPLY_LOSS (derived from SUPPLY_PROFIT): {supply_loss_val} -> {label}")
 
     # aSOPR estimate, derived from the same SOPR fetch — see
@@ -965,6 +1118,7 @@ def main():
     else:
         label, css = status_pill(asopr_est, "low", 1.0)
     values["ASOPR_EST_STATUS_LABEL"], values["ASOPR_EST_STATUS_CLASS"] = label, css
+    values["ASOPR_EST_TARGET"] = target_for("ASOPR_EST")
     print(f"  ASOPR_EST (modeled from SOPR={values.get('SOPR')}): {asopr_est} -> {label}")
 
     print("Fetching price history from CoinGecko (340 days, needed for NVT Golden Cross)...")
@@ -989,12 +1143,24 @@ def main():
     else:
         rp_label, rp_css = "CHECK", "st-mid"
     values["REALIZED_PRICE_STATUS_LABEL"], values["REALIZED_PRICE_STATUS_CLASS"] = rp_label, rp_css
+    # The target IS the reading itself — buy-favorable triggers when spot
+    # price falls below this cost-basis figure, so there's no separate
+    # number to compute; just relabel it as the threshold it already is.
+    if realized_price_val is not None:
+        try:
+            values["REALIZED_PRICE_TARGET"] = f"Spot < ${float(realized_price_val):,.0f}"
+        except (TypeError, ValueError):
+            values["REALIZED_PRICE_TARGET"] = "Spot below realized price"
+    else:
+        values["REALIZED_PRICE_TARGET"] = "Spot below realized price"
 
     mayer, drawdown = compute_mayer_and_drawdown(price_history)
     values["MAYER"] = mayer
     values["DRAWDOWN"] = drawdown
     label, css = status_pill(mayer, "low", 1.0)
     values["MAYER_STATUS_LABEL"], values["MAYER_STATUS_CLASS"] = label, css
+    values["MAYER_TARGET"] = target_for("MAYER")
+    values["DRAWDOWN_TARGET"] = target_for("DRAWDOWN")
     print(f"  Mayer Multiple: {mayer} | Drawdown from ATH: {drawdown}%")
 
     print("Computing weekly RSI, MACD, and Bollinger %B from the same price history...")
@@ -1002,17 +1168,20 @@ def main():
     values["RSI"] = rsi
     label, css = status_pill(rsi, "low", 30.0)
     values["RSI_STATUS_LABEL"], values["RSI_STATUS_CLASS"] = label, css
+    values["RSI_TARGET"] = target_for("RSI")
 
     macd_hist, macd_crossed = compute_weekly_macd(price_history)
     values["MACD"] = macd_hist
     values["MACD_CROSSED"] = "Yes — fresh this week" if macd_crossed else "No"
     label, css = status_pill(macd_hist, "high", 0.0)
     values["MACD_STATUS_LABEL"], values["MACD_STATUS_CLASS"] = label, css
+    values["MACD_TARGET"] = target_for("MACD")
 
     bollinger_pb = compute_bollinger(price_history)
     values["BOLLINGER"] = bollinger_pb
     label, css = status_pill(bollinger_pb, "low", 0.2)
     values["BOLLINGER_STATUS_LABEL"], values["BOLLINGER_STATUS_CLASS"] = label, css
+    values["BOLLINGER_TARGET"] = target_for("BOLLINGER")
     print(f"  RSI: {rsi} | MACD histogram: {macd_hist} (crossed: {macd_crossed}) | Bollinger %B: {bollinger_pb}")
 
     print("Fetching network stats from Blockchain.com...")
@@ -1025,6 +1194,15 @@ def main():
     if pct_vs_cost is not None:
         prod_status, prod_css = ("BUY ZONE", "st-buy") if pct_vs_cost < 0 else ("NOT YET", "st-no")
     values["PROD_COST_STATUS_LABEL"], values["PROD_COST_STATUS_CLASS"] = prod_status, prod_css
+    # Same self-referential logic as Realized Price: buy-favorable triggers
+    # when spot falls below this estimated production-cost figure.
+    if cost_per_btc is not None:
+        try:
+            values["PROD_COST_TARGET"] = f"Spot < ${float(cost_per_btc):,.0f}"
+        except (TypeError, ValueError):
+            values["PROD_COST_TARGET"] = "Spot below production cost"
+    else:
+        values["PROD_COST_TARGET"] = "Spot below production cost"
     print(f"  Est. production cost (electricity-only): ${cost_per_btc} ({pct_vs_cost}% vs. spot)")
 
     hashrate_hist = fetch_blockchain_chart("hash-rate", days=100)
@@ -1038,6 +1216,7 @@ def main():
     mc_css = {"BUY SIGNAL": "st-buy", "CAPITULATION": "st-mid", "RECOVERING": "st-mid", None: "st-mid"}.get(mc_state, "st-mid")
     values["MINER_CAP_STATUS_LABEL"] = mc_state or "CHECK"
     values["MINER_CAP_STATUS_CLASS"] = mc_css
+    values["MINER_CAP_TARGET"] = target_for("MINER_CAP")
     print(f"  Miner Capitulation (Hash Ribbons): {mc_state}, hashrate MA deviation {hr_deviation}%")
 
     print("Fetching transaction volume history from Blockchain.com (340 days)...")
@@ -1053,6 +1232,7 @@ def main():
     else:
         nvt_label, nvt_css = "NEUTRAL", "st-mid"
     values["NVT_GC_STATUS_LABEL"], values["NVT_GC_STATUS_CLASS"] = nvt_label, nvt_css
+    values["NVT_GC_TARGET"] = target_for("NVT_GC")
     print(f"  NVT Golden Cross (z-score): {nvt_gc} -> {nvt_label}")
 
     print("Fetching Fear & Greed from Alternative.me...")
@@ -1061,6 +1241,7 @@ def main():
     values["FNG_LABEL"] = fng_label
     label, css = status_pill(fng_val, "low", 20.0)
     values["FNG_STATUS_LABEL"], values["FNG_STATUS_CLASS"] = label, css
+    values["FNG_TARGET"] = target_for("FNG")
     print(f"  Fear & Greed: {fng_val} ({fng_label})")
 
     print("Fetching Polymarket Bitcoin prediction markets (weekly/biweekly/monthly/quarterly/yearly)...")
