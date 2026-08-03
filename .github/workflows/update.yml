@@ -41,7 +41,7 @@ jobs:
           git config user.name "btc-dashboard-bot"
           git config user.email "actions@users.noreply.github.com"
 
-          git add dashboard.html
+          git add dashboard.html last_known_good.json
           if git diff --quiet --cached; then
             echo "No changes to commit."
             exit 0
@@ -72,7 +72,7 @@ jobs:
             # commit silently on conflict, whereas this reset+recommit makes
             # the update explicit and idempotent every time.
             git reset --soft origin/master
-            git add dashboard.html
+            git add dashboard.html last_known_good.json
 
             if git diff --quiet --cached; then
               echo "Remote already has this dashboard content; nothing left to push."
