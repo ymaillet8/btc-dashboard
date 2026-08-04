@@ -236,7 +236,7 @@ BG_METRICS = {
     # free tier reliably supports — a possible future addition, not
     # implemented here.
     "NRPL":          ("nrpl-btc",         "low",  None),   # Net Realized P&L in BTC — confirmed-real slug (seen directly in your BGeometrics account's own API usage examples), not a guess like the metric it replaced
-    "SUPPLY_PROFIT": ("supply-in-profit", None,   None),    # % Supply in Loss = 100 - this, computed in main()
+    "SUPPLY_PROFIT": ("supply-profit", None,   None),    # confirmed-real slug (BGeometrics API Playground/docs, Aug 2026) — % Supply in Loss = 100 - this, computed in main()
     "SOPR":          ("sopr",             None,   None),    # raw fetch only — used to derive an aSOPR estimate below, not shown directly
 }
 # v9: swapped VDD (an unconfirmed slug guess that was always context-only
