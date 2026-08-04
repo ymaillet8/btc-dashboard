@@ -1128,12 +1128,36 @@ def target_for(token):
 # established then) — this is the single reference used to build the rank
 # table below, so a token's position here IS its rank, whether or not it
 # actually carries scoreable weight.
-MASTER_RANK_ORDER = [
+# The pool of every indicator this dashboard tracks. Order here is now
+# ONLY a fallback/tiebreak reference — actual displayed rank is derived
+# from real weight below, not maintained as a hand-written list. That's
+# the fix for a real bug: the old hand-written order drifted out of sync
+# with the weights after multiple rounds of genuine reweighting (Prod
+# Cost's upgrade, aSOPR's discount), producing ranks that didn't match
+# what the weights actually said. A derived rank can't drift again.
+_ALL_TRACKED_TOKENS = [
     "MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
     "LTH_SOPR", "PROD_COST", "NRPL", "ASOPR_EST", "NVT_GC",
     "MINER_CAP", "MACD", "SUPPLY_LOSS", "MAYER", "RSI", "FNG", "BOLLINGER",
     "DRAWDOWN", "CYCLE_RHYTHM",
 ]
+
+
+def get_master_rank_order():
+    """Scored indicators sorted strictly by actual current weight,
+    heaviest first (ties broken by the original conceptual order, purely
+    for stable/deterministic output). Indicators with no current weight
+    (N/A) are appended after ALL scored ones, in their original
+    conceptual order — they have no number to sort by, but this
+    guarantees they can never rank above a genuinely weighted indicator,
+    which is exactly the bug this replaces. Called fresh each run rather
+    than cached, since WEIGHT_MAP can change at runtime (Thermocap/NRPL
+    conditionally join it once their 90-day bootstrap completes)."""
+    tiebreak = {t: i for i, t in enumerate(_ALL_TRACKED_TOKENS)}
+    scored = [t for t in _ALL_TRACKED_TOKENS if t in WEIGHT_MAP]
+    unscored = [t for t in _ALL_TRACKED_TOKENS if t not in WEIGHT_MAP]
+    scored.sort(key=lambda t: (-WEIGHT_MAP[t], tiebreak[t]))
+    return scored + unscored
 
 # Short, one-line reasons for every indicator that can never contribute a
 # scored vote — shown as a bullet under its row instead of a percentage.
@@ -1148,7 +1172,7 @@ EXCLUSION_REASONS = {
 
 def build_full_weighted_breakdown(values):
     """One unified, ranked table: Power Law at rank 1 (veto power, not a
-    percentage), then every tracked indicator in MASTER_RANK_ORDER below
+    percentage), then every tracked indicator via get_master_rank_order() below
     it. Shows each indicator's actual reading, its weight-share of the
     total pool (or N/A plus a one-line reason for indicators that can
     never score), its target, and today's status. Returns a ready-to-
@@ -1172,7 +1196,7 @@ def build_full_weighted_breakdown(values):
         "CYCLE_RHYTHM": lambda v: f"{v.get('DAYS_SINCE_TOP', '\u2014')}d since top",
     }
 
-    for i, token in enumerate(MASTER_RANK_ORDER, start=2):
+    for i, token in enumerate(get_master_rank_order(), start=2):
         name = DISPLAY_NAMES.get(token, token)
         target = values.get(f"{token}_TARGET", "—")
         if token in READING_OVERRIDE:
@@ -1638,7 +1662,7 @@ def main():
 
     print("Building weighted verdict synthesis...")
     values["FULL_WEIGHTED_BREAKDOWN_ROWS"] = build_full_weighted_breakdown(values)
-    values["TOTAL_TRACKED_COUNT"] = len(MASTER_RANK_ORDER) + 1  # +1 for Power Law, always rank 1
+    values["TOTAL_TRACKED_COUNT"] = len(_ALL_TRACKED_TOKENS) + 1  # +1 for Power Law, always rank 1
     verdict = build_verdict(values)
     values.update(verdict)
     # Anchor icon (⚓) next to every indicator currently carrying real
