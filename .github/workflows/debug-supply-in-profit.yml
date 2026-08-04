@@ -1,0 +1,19 @@
+name: Debug supply-in-profit endpoint
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Curl api.bitcoin-data.com supply-in-profit in isolation
+        env:
+          BGEOMETRICS_API_KEY: ${{ secrets.BGEOMETRICS_API_KEY }}
+        run: |
+          echo "=== https://api.bitcoin-data.com/v1/supply-in-profit ==="
+          curl -sS -D - -o body1.txt -w "\nHTTP_STATUS:%{http_code}\n" \
+            -H "Authorization: Bearer $BGEOMETRICS_API_KEY" \
+            "https://api.bitcoin-data.com/v1/supply-in-profit"
+          echo "--- body ---"
+          cat body1.txt
