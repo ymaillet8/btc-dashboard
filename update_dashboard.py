@@ -1431,9 +1431,15 @@ def main():
             values[f"{token}_TARGET"] = f"N/A \u2014 building history ({n_points}/{MIN_HISTORY_DAYS} days). Reference: {ref}"
             print(f"  {token}: only {n_points}/{MIN_HISTORY_DAYS} days of history accumulated, staying N/A")
 
-    # Supply in Loss = 100 - Supply in Profit (BGeometrics only exposes the
-    # profit side under this slug guess; the loss framing is the one your
+    # Supply in Loss = 100 - % Supply in Profit (BGeometrics only exposes
+    # the profit side under this slug; the loss framing is the one your
     # original ranking used, and the one this whole project started from).
+    # supply-profit returns a raw BTC count, not a percentage (confirmed
+    # via BGeometrics' own docs, Aug 2026), so it has to be divided by
+    # circulating supply first. Circulating supply comes from a dedicated
+    # Blockchain.com /stats call here (totalbc, in satoshis) rather than
+    # reusing the one fetched later in main() for Production Cost, since
+    # reordering the whole function isn't worth it for one shared number.
     # If the underlying Supply-in-Profit value came from cache (stale),
     # this derived figure inherits that staleness rather than looking
     # freshly computed.
@@ -1441,10 +1447,16 @@ def main():
     supply_profit_is_stale = values.get("SUPPLY_PROFIT_STATUS_LABEL", "").startswith("STALE")
     supply_loss_val = None
     if supply_profit_val is not None:
-        try:
-            supply_loss_val = round(100 - float(supply_profit_val), 2)
-        except (TypeError, ValueError):
-            supply_loss_val = None
+        circulating_stats = fetch_blockchain_stats()
+        circulating_btc = circulating_stats.get("totalbc")
+        if circulating_btc:
+            try:
+                percent_in_profit = (float(supply_profit_val) / (circulating_btc / 1e8)) * 100
+                supply_loss_val = round(100 - percent_in_profit, 2)
+            except (TypeError, ValueError, ZeroDivisionError):
+                supply_loss_val = None
+        else:
+            print("  ! circulating supply (totalbc) unavailable — SUPPLY_LOSS staying N/A")
     values["SUPPLY_LOSS"] = supply_loss_val
     if supply_profit_is_stale:
         cached_date = values["SUPPLY_PROFIT_STATUS_LABEL"].split("(")[1].rstrip(")")
