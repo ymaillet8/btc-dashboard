@@ -226,7 +226,15 @@ BG_METRICS = {
     "RESERVE_RISK":  ("reserve-risk",     "low",  0.002),
     "THERMOCAP":     ("thermocap-multiple", "low", None),
     "LTH_SOPR":      ("lth-sopr",         "low",  1.0),
-    "PI_CYCLE":      ("pi-cycle",         None,   None),   # completes original top-8; may be the Top variant not Bottom — see note
+    # Pi Cycle removed (v18): confirmed via BGeometrics' own chart page
+    # description (charts.bgeometrics.com/pi_cycle.html) that this feed is
+    # the Top-only variant (111-day vs 350-day SMA), not the genuine Bottom
+    # variant (150-day EMA vs 471-day SMA x0.745, a completely different
+    # calculation). A top-only signal has no use case on a dashboard built
+    # specifically to call bottoms. The real Bottom variant would require
+    # ~500+ days of price history to self-compute, more than CoinGecko's
+    # free tier reliably supports — a possible future addition, not
+    # implemented here.
     "NRPL":          ("nrpl-btc",         "low",  None),   # Net Realized P&L in BTC — confirmed-real slug (seen directly in your BGeometrics account's own API usage examples), not a guess like the metric it replaced
     "SUPPLY_PROFIT": ("supply-in-profit", None,   None),    # % Supply in Loss = 100 - this, computed in main()
     "SOPR":          ("sopr",             None,   None),    # raw fetch only — used to derive an aSOPR estimate below, not shown directly
@@ -949,6 +957,17 @@ def compute_asopr_estimate(sopr_val):
         return None
 
 
+def _distance_note(v, threshold, direction):
+    """How far a non-buy-favorable reading sits from its threshold, as a
+    percentage where the threshold is meaningfully non-zero, or an
+    absolute distance for a zero threshold (a % of zero is meaningless)."""
+    if threshold == 0:
+        gap = abs(v - threshold)
+        return f" ({round(gap, 3)} away from threshold)"
+    pct_away = abs((v - threshold) / threshold) * 100
+    return f" ({round(pct_away, 1)}% away from threshold)"
+
+
 def status_pill(value, direction, threshold, cache=None, token=None):
     """direction='low': buy-favorable at or below threshold. direction='high':
     buy-favorable at or above threshold. If cache+token are supplied, also
@@ -971,7 +990,7 @@ def status_pill(value, direction, threshold, cache=None, token=None):
             band, source = near_threshold_band(cache, token, threshold)
             if band is not None and v <= threshold + band:
                 return f"NEAR THRESHOLD ({source})", "st-near"
-        return "NOT YET", "st-no"
+        return f"NOT YET{_distance_note(v, threshold, direction)}", "st-no"
 
     if direction == "high":
         if v >= threshold:
@@ -980,7 +999,7 @@ def status_pill(value, direction, threshold, cache=None, token=None):
             band, source = near_threshold_band(cache, token, threshold)
             if band is not None and v >= threshold - band:
                 return f"NEAR THRESHOLD ({source})", "st-near"
-        return "NORMAL", "st-no"
+        return f"NORMAL{_distance_note(v, threshold, direction)}", "st-no"
 
     return "CHECK", "st-mid"
 
@@ -1010,7 +1029,18 @@ WEIGHT_MAP = {
     # inconsistent: it inflated the total weight pool's denominator with
     # weight that could never be earned. Same treatment as NRPL, Drawdown,
     # and Cycle Rhythm now — displayed, ranked, explicitly N/A on weight.
-    "LTH_SOPR": 2, "NVT_GC": 2, "ASOPR_EST": 2,
+    # LTH-SOPR vs aSOPR redundancy, evaluated (v18): both are SOPR-family
+    # profit/loss-realization ratios, but cover genuinely different holder
+    # cohorts (LTH-SOPR = long-term holders only; aSOPR = the full holder
+    # base, minus <1hr noise) — not the same-ratio-twice case that Realized
+    # Price/MVRV Z-Score was. Full removal of either would lose real,
+    # non-duplicate information (different cohorts often move at different
+    # times — LTH-SOPR tends to lag as long-term holders capitulate last).
+    # But there IS a real, moderate overlap (all-holder SOPR mathematically
+    # contains long-term-holder activity as a blended-in subset), and
+    # aSOPR carries additional uncertainty as a modeled estimate rather
+    # than a directly-measured feed. Net verdict: discount, don't remove.
+    "LTH_SOPR": 2, "NVT_GC": 2, "ASOPR_EST": 1.5,
     "PROD_COST": 2.5,
     # Tier 3 — behavioral/technical (weight 1.5)
     "MINER_CAP": 1.5, "MACD": 1.5,
@@ -1028,7 +1058,7 @@ DISPLAY_NAMES = {
     "PUELL": "Puell Multiple", "RESERVE_RISK": "Reserve Risk",
     "THERMOCAP": "Thermocap Multiple", "LTH_SOPR": "LTH-SOPR",
     "PROD_COST": "Production Cost", "NVT_GC": "NVT Golden Cross",
-    "PI_CYCLE": "Pi Cycle", "NRPL": "NRPL (Net Realized P&L)",
+    "NRPL": "NRPL (Net Realized P&L)",
     "SUPPLY_LOSS": "% Supply in Loss", "ASOPR_EST": "aSOPR (modeled)",
     "MINER_CAP": "Miner Capitulation", "MACD": "MACD (weekly)",
     "MAYER": "Mayer Multiple", "RSI": "Weekly RSI", "FNG": "Fear & Greed",
@@ -1082,9 +1112,8 @@ TARGET_LABELS = {
     "MACD":          "histogram crosses \u2265 0",
     "RSI":           "\u2264 30 (oversold)",
     "BOLLINGER":     "\u2264 0.2 (near lower band)",
-    "THERMOCAP":     "\u2264 ~4x (illustrative \u2014 no fixed published threshold)",
-    "PI_CYCLE":      "N/A \u2014 MA crossover event, not a level",
-    "NRPL":          "\u2264 \u2212800,000 BTC (2018/2022 bottom analog, illustrative)",
+    "THERMOCAP":     "\u2264 ~4x (2018/19 & 2022 bottom analog, Glassnode-sourced \u2014 reference only, live percentile is the real threshold once active)",
+    "NRPL":          "No citable historical bottom value found (checked directly) \u2014 live percentile is the only real threshold, no illustrative fallback",
     "DRAWDOWN":      "\u221277% to \u221283% (past cycle-bottom range, descriptive only)",
     "MINER_CAP":     "Hash Ribbons \u201cBUY SIGNAL\u201d state (recovery + price MA confirmed)",
 }
@@ -1101,7 +1130,7 @@ def target_for(token):
 # actually carries scoreable weight.
 MASTER_RANK_ORDER = [
     "MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
-    "LTH_SOPR", "PI_CYCLE", "PROD_COST", "NRPL", "ASOPR_EST", "NVT_GC",
+    "LTH_SOPR", "PROD_COST", "NRPL", "ASOPR_EST", "NVT_GC",
     "MINER_CAP", "MACD", "SUPPLY_LOSS", "MAYER", "RSI", "FNG", "BOLLINGER",
     "DRAWDOWN", "CYCLE_RHYTHM",
 ]
@@ -1111,7 +1140,6 @@ MASTER_RANK_ORDER = [
 EXCLUSION_REASONS = {
     "REALIZED_PRICE": "Redundant — same core ratio as MVRV Z-Score, just un-normalized",
     "THERMOCAP": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
-    "PI_CYCLE": "A crossover event, not a continuous magnitude — plus uncertainty over Top vs. Bottom variant",
     "NRPL": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
     "DRAWDOWN": "Descriptive by nature — a % fallen, not a level to cross",
     "CYCLE_RHYTHM": "A calendar date, not a threshold — nothing to score",
@@ -1121,44 +1149,60 @@ EXCLUSION_REASONS = {
 def build_full_weighted_breakdown(values):
     """One unified, ranked table: Power Law at rank 1 (veto power, not a
     percentage), then every tracked indicator in MASTER_RANK_ORDER below
-    it. Indicators with real scoreable weight show their true share of the
-    total pool; indicators that can never score show N/A plus a one-line
-    reason. Returns a ready-to-insert HTML string, since the day-to-day
-    status mix changes every run."""
+    it. Shows each indicator's actual reading, its weight-share of the
+    total pool (or N/A plus a one-line reason for indicators that can
+    never score), its target, and today's status. Returns a ready-to-
+    insert HTML string, since the day-to-day status mix changes every run."""
     rows = []
 
     # Rank 1 — Power Law, always first, never part of the weight pool.
     rows.append(
         '<tr class="rank-veto"><td class="rank-num">1</td>'
         '<td class="ind-name">Santostasi Power Law</td>'
+        '<td class="reading">\u2014</td>'
         '<td class="reading">VETO</td>'
         '<td class="target">Lower band touch (manual)</td>'
         '<td><span class="status-pill" style="background:rgba(96,165,250,.15); color:var(--blue);">MASTER SIGNAL</span></td></tr>'
     )
 
+    # Most tokens' raw reading lives under values[token] directly; a few
+    # need a different key for a genuinely meaningful display.
+    READING_OVERRIDE = {
+        "MINER_CAP": lambda v: v.get("MINER_CAP_STATE", "\u2014"),
+        "CYCLE_RHYTHM": lambda v: f"{v.get('DAYS_SINCE_TOP', '\u2014')}d since top",
+    }
+
     for i, token in enumerate(MASTER_RANK_ORDER, start=2):
         name = DISPLAY_NAMES.get(token, token)
         target = values.get(f"{token}_TARGET", "—")
+        if token in READING_OVERRIDE:
+            reading_val = READING_OVERRIDE[token](values)
+        else:
+            reading_val = values.get(token)
+            reading_val = "\u2014" if reading_val is None else reading_val
 
         if token in WEIGHT_MAP:
             weight = WEIGHT_MAP[token]
             pct_of_total = round((weight / sum(WEIGHT_MAP.values())) * 100, 1)
-            reading = f"{pct_of_total}%"
+            weight_display = f"{pct_of_total}%"
             css = values.get(f"{token}_STATUS_CLASS")
             label = values.get(f"{token}_STATUS_LABEL", "CHECK")
             if css == "st-buy":
                 status_text, status_css = "BUY-FAVORABLE", "st-buy"
             elif css == "st-near":
                 status_text, status_css = "NEAR-THRESHOLD", "st-near"
+            elif css == "st-watch":
+                status_text, status_css = label, "st-watch"
             elif css == "st-no":
-                status_text, status_css = "NOT YET", "st-no"
+                status_text, status_css = label, "st-no"
             elif label and label.startswith("STALE"):
                 status_text, status_css = label, "st-mid"
             else:
                 status_text, status_css = "NO READING TODAY", "st-mid"
             rows.append(
                 f'<tr><td class="rank-num">{i}</td><td class="ind-name">{name}</td>'
-                f'<td class="reading">{reading}</td>'
+                f'<td class="reading">{reading_val}</td>'
+                f'<td class="reading">{weight_display}</td>'
                 f'<td class="target">{target}</td>'
                 f'<td><span class="status-pill {status_css}">{status_text}</span></td></tr>'
             )
@@ -1167,6 +1211,7 @@ def build_full_weighted_breakdown(values):
             rows.append(
                 f'<tr class="rank-na"><td class="rank-num">{i}</td>'
                 f'<td class="ind-name">{name}<div class="na-reason">{reason}</div></td>'
+                f'<td class="reading">{reading_val}</td>'
                 f'<td class="reading">N/A</td>'
                 f'<td class="target">{target}</td>'
                 f'<td><span class="status-pill st-mid">NOT SCORED</span></td></tr>'
@@ -1177,7 +1222,7 @@ def build_full_weighted_breakdown(values):
 # Matches the two live-indicator table sections in the template exactly —
 # used only for the summary counts below, not for scoring itself.
 CORE_TOKENS = ("MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
-               "LTH_SOPR", "PI_CYCLE", "NRPL", "SUPPLY_LOSS", "ASOPR_EST")
+               "LTH_SOPR", "NRPL", "SUPPLY_LOSS", "ASOPR_EST")
 SELF_COMPUTED_TOKENS = ("PROD_COST", "MAYER", "DRAWDOWN", "MINER_CAP", "NVT_GC",
                          "FNG", "MACD", "RSI", "BOLLINGER", "CYCLE_RHYTHM")
 
@@ -1227,7 +1272,7 @@ def build_signal_summary_html(values):
         </div>
         <div class="summary-cell summary-cell-main">
           <div class="summary-pct-main">{weighted_pct_display}</div>
-          <div class="summary-label">Actual weighted percentage</div>
+          <div class="summary-label">\u2693 Actual weighted percentage \u2693</div>
         </div>
       </div>
     </div>'''
@@ -1333,10 +1378,14 @@ def main():
 
     # Rolling-percentile thresholds for Thermocap and NRPL — see the long
     # comment above rolling_threshold() for the research this is grounded
-    # in. Pi Cycle deliberately isn't included here: it's a moving-average
-    # crossover event, not a continuous magnitude, so percentile scoring
-    # doesn't apply to it the same way — a different limitation, not one
-    # this technique fixes, so it correctly stays excluded regardless.
+    # in. Researched historical-cycle reference values (2018/19 & 2022
+    # bottoms) shown alongside the accumulation progress below, purely as
+    # comparison context — never used as the live scoring threshold, and
+    # honestly reported where no citable number exists.
+    HISTORICAL_REFERENCE = {
+        "THERMOCAP": "~4x at 2018/19 & 2022 bottoms (Glassnode-sourced)",
+        "NRPL": "no citable historical bottom value found (checked directly)",
+    }
     PERCENTILE_ELIGIBLE = ("THERMOCAP", "NRPL")
     for token in PERCENTILE_ELIGIBLE:
         fresh_val = values.get(token)
@@ -1354,7 +1403,8 @@ def main():
             WEIGHT_MAP[token] = 1.5  # Tier 3: real and self-computed, but not yet full-cycle-validated
             print(f"  {token}: rolling {PERCENTILE_CUTOFF}th percentile threshold = {round(threshold, 2)} (n={n_points}) -> {label}")
         else:
-            values[f"{token}_TARGET"] = f"N/A \u2014 building history ({n_points}/{MIN_HISTORY_DAYS} days)"
+            ref = HISTORICAL_REFERENCE.get(token, "")
+            values[f"{token}_TARGET"] = f"N/A \u2014 building history ({n_points}/{MIN_HISTORY_DAYS} days). Reference: {ref}"
             print(f"  {token}: only {n_points}/{MIN_HISTORY_DAYS} days of history accumulated, staying N/A")
 
     # Supply in Loss = 100 - Supply in Profit (BGeometrics only exposes the
@@ -1497,11 +1547,19 @@ def main():
     values["MINER_CAP"] = hr_deviation
     values["MINER_CAP_STATE"] = mc_state or "CHECK"
     # Only the full Edwards "BUY SIGNAL" (recovery + price momentum) counts as
-    # a positive trigger. Being mid-capitulation or recovering-without-price-
-    # confirmation is context, not a signal — matches the true methodology
-    # rather than over-crediting the in-progress states.
-    mc_css = {"BUY SIGNAL": "st-buy", "CAPITULATION": "st-mid", "RECOVERING": "st-mid", None: "st-mid"}.get(mc_state, "st-mid")
-    values["MINER_CAP_STATUS_LABEL"] = mc_state or "CHECK"
+    # a positive trigger — capitulation is a precursor/warning state that has
+    # historically PRECEDED bottoms, not the bottom-confirmation itself. Per
+    # Edwards' own methodology, mid-capitulation is not yet a buy; the buy is
+    # the recovery that follows. Kept as a distinct "watch" state (same blue
+    # used for near-threshold leeway) rather than flat neutral, since it IS
+    # meaningfully different from "no data" — just not a confirmed trigger.
+    mc_label_map = {
+        "BUY SIGNAL": ("BUY", "st-buy"),
+        "CAPITULATION": ("CAPITULATION (watch)", "st-watch"),
+        "RECOVERING": ("RECOVERING (watch)", "st-watch"),
+    }
+    mc_label, mc_css = mc_label_map.get(mc_state, ("CHECK", "st-mid"))
+    values["MINER_CAP_STATUS_LABEL"] = mc_label
     values["MINER_CAP_STATUS_CLASS"] = mc_css
     values["MINER_CAP_TARGET"] = target_for("MINER_CAP")
     print(f"  Miner Capitulation (Hash Ribbons): {mc_state}, hashrate MA deviation {hr_deviation}%")
@@ -1517,7 +1575,8 @@ def main():
     elif nvt_gc < -1.6:
         nvt_label, nvt_css = "BUY ZONE", "st-buy"
     else:
-        nvt_label, nvt_css = "NEUTRAL", "st-mid"
+        gap = abs(nvt_gc - (-1.6))
+        nvt_label, nvt_css = f"NEUTRAL ({round(gap, 2)} away from buy zone)", "st-mid"
     values["NVT_GC_STATUS_LABEL"], values["NVT_GC_STATUS_CLASS"] = nvt_label, nvt_css
     values["NVT_GC_TARGET"] = target_for("NVT_GC")
     print(f"  NVT Golden Cross (z-score): {nvt_gc} -> {nvt_label}")
@@ -1582,6 +1641,13 @@ def main():
     values["TOTAL_TRACKED_COUNT"] = len(MASTER_RANK_ORDER) + 1  # +1 for Power Law, always rank 1
     verdict = build_verdict(values)
     values.update(verdict)
+    # Anchor icon (⚓) next to every indicator currently carrying real
+    # weight in the verdict — a quick visual "this one counts" marker,
+    # computed after WEIGHT_MAP is finalized (Thermocap/NRPL may have
+    # just conditionally joined it above).
+    for _t in CORE_TOKENS + SELF_COMPUTED_TOKENS:
+        values[f"{_t}_ANCHOR"] = "\u2693" if _t in WEIGHT_MAP else ""
+
     values["SIGNAL_SUMMARY_BOX"] = build_signal_summary_html(values)
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")
 

@@ -91,6 +91,7 @@
   tbody tr:hover{background:var(--panel);}
   .ind-name{font-weight:600; font-size:15px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;}
   .caveat{color:var(--text-faint); font-weight:400; font-size:12.5px;}
+  .anchor-icon{color:var(--blue); font-size:13px; opacity:.85;}
   .ind-source a{font-family:var(--mono); font-size:12px; text-decoration:none;}
   .ind-source a:hover{text-decoration:underline;}
   .reading{font-family:var(--mono); font-size:15px; font-weight:600;}
@@ -103,6 +104,7 @@
   .st-no{background:var(--red-dim); color:var(--red);}
   .st-mid{background:var(--amber-dim); color:var(--amber);}
   .st-near{background:rgba(107,169,250,.14); color:var(--blue); border:1px solid rgba(107,169,250,.3);}
+  .st-watch{background:rgba(107,169,250,.14); color:var(--blue); border:1px solid rgba(107,169,250,.3);}
 
   /* --- Signal summary box --- */
   .summary-box{
@@ -222,14 +224,14 @@
         <tr>
           <td class="ind-name">MVRV Z-Score
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Market cap vs. realized cap, standardized against its own historical volatility. The most refined member of the "price vs. cost basis" family — highest weight on this board.</span></span>
-          </td>
+           <span class="anchor-icon">{{MVRV_Z_ANCHOR}}</span></td>
           <td class="reading">{{MVRV_Z}}</td>
           <td class="target">{{MVRV_Z_TARGET}}</td>
           <td><span class="status-pill {{MVRV_Z_STATUS_CLASS}}">{{MVRV_Z_STATUS_LABEL}}</span></td>
           <td class="ind-source"><a href="https://charts.bgeometrics.com/mvrv.html" target="_blank">view</a></td>
         </tr>
         <tr>
-          <td class="ind-name">Realized Price <span class="caveat">shown, not scored</span>
+          <td class="ind-name">Realized Price <span class="caveat">shown, not scored</span> <span class="anchor-icon">{{REALIZED_PRICE_ANCHOR}}</span>
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Average cost basis of every coin. <strong>Not counted in the weighted verdict</strong> — mathematically the un-normalized version of MVRV Z-Score (spot ÷ realized price IS the MVRV ratio), so scoring both would double-count one signal.</span></span>
           </td>
           <td class="reading">${{REALIZED_PRICE}}</td>
@@ -240,7 +242,7 @@
         <tr>
           <td class="ind-name">Puell Multiple
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Daily miner issuance value vs. its 365-day average. Ties valuation to real mining economics — genuinely independent from the on-chain price-ratio cluster above.</span></span>
-          </td>
+           <span class="anchor-icon">{{PUELL_ANCHOR}}</span></td>
           <td class="reading">{{PUELL}}</td>
           <td class="target">{{PUELL_TARGET}}</td>
           <td><span class="status-pill {{PUELL_STATUS_CLASS}}">{{PUELL_STATUS_LABEL}}</span></td>
@@ -249,7 +251,7 @@
         <tr>
           <td class="ind-name">Reserve Risk
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Price relative to long-term holder conviction (accumulated coin-days vs. price). Thinner public track record than MVRV/Puell, hence a discounted weight.</span></span>
-          </td>
+           <span class="anchor-icon">{{RESERVE_RISK_ANCHOR}}</span></td>
           <td class="reading">{{RESERVE_RISK}}</td>
           <td class="target">{{RESERVE_RISK_TARGET}}</td>
           <td><span class="status-pill {{RESERVE_RISK_STATUS_CLASS}}">{{RESERVE_RISK_STATUS_LABEL}}</span></td>
@@ -258,7 +260,7 @@
         <tr>
           <td class="ind-name">LTH-SOPR
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Long-term holders spending at profit (&gt;1) or loss (&lt;1). A behavioral confirmation signal — tends to lag the actual low rather than lead it.</span></span>
-          </td>
+           <span class="anchor-icon">{{LTH_SOPR_ANCHOR}}</span></td>
           <td class="reading">{{LTH_SOPR}}</td>
           <td class="target">{{LTH_SOPR_TARGET}}</td>
           <td><span class="status-pill {{LTH_SOPR_STATUS_CLASS}}">{{LTH_SOPR_STATUS_LABEL}}</span></td>
@@ -267,25 +269,16 @@
         <tr>
           <td class="ind-name">Thermocap Multiple
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Market cap vs. cumulative miner revenue ever paid. No globally-agreed fixed threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older market — see README for the research behind this. Scored at reduced (Tier 3) weight until then.</span></span>
-          </td>
+           <span class="anchor-icon">{{THERMOCAP_ANCHOR}}</span></td>
           <td class="reading">{{THERMOCAP}}</td>
           <td class="target">{{THERMOCAP_TARGET}}</td>
           <td><span class="status-pill {{THERMOCAP_STATUS_CLASS}}">{{THERMOCAP_STATUS_LABEL}}</span></td>
           <td class="ind-source"><a href="https://charts.bitbo.io/thermocap-multiple/" target="_blank">view</a></td>
         </tr>
         <tr>
-          <td class="ind-name">Pi Cycle <span class="caveat">not scored</span>
-            <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Long-term moving-average crossover cycle marker. <strong>Not counted</strong> — it's a crossover event, not a continuous magnitude, so no percentile or fixed threshold applies. Also genuine uncertainty over whether this feed is the Top or Bottom variant.</span></span>
-          </td>
-          <td class="reading">{{PI_CYCLE}}</td>
-          <td class="target">{{PI_CYCLE_TARGET}}</td>
-          <td><span class="status-pill st-mid">CONTEXT ONLY</span></td>
-          <td class="ind-source"><a href="https://charts.bgeometrics.com/pi_cycle.html" target="_blank">view</a></td>
-        </tr>
-        <tr>
           <td class="ind-name">NRPL
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Net Realized P&amp;L in BTC — realized profit minus realized loss; deeply negative means capitulation dominates. No fixed published threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older, smaller network — see README. Scored at reduced (Tier 3) weight until then.</span></span>
-          </td>
+           <span class="anchor-icon">{{NRPL_ANCHOR}}</span></td>
           <td class="reading">{{NRPL}}</td>
           <td class="target">{{NRPL_TARGET}}</td>
           <td><span class="status-pill {{NRPL_STATUS_CLASS}}">{{NRPL_STATUS_LABEL}}</span></td>
@@ -294,7 +287,7 @@
         <tr>
           <td class="ind-name">% Supply in Loss
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Share of circulating BTC below cost basis (derived: 100 − Supply in Profit). The metric this whole project started from.</span></span>
-          </td>
+           <span class="anchor-icon">{{SUPPLY_LOSS_ANCHOR}}</span></td>
           <td class="reading">{{SUPPLY_LOSS}}%</td>
           <td class="target">{{SUPPLY_LOSS_TARGET}}</td>
           <td><span class="status-pill {{SUPPLY_LOSS_STATUS_CLASS}}">{{SUPPLY_LOSS_STATUS_LABEL}}</span></td>
@@ -303,7 +296,7 @@
         <tr>
           <td class="ind-name">aSOPR <span class="caveat">modeled</span>
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode's own published mechanism, not a raw substitute for the real metric.</span></span>
-          </td>
+           <span class="anchor-icon">{{ASOPR_EST_ANCHOR}}</span></td>
           <td class="reading">{{ASOPR_EST}}</td>
           <td class="target">{{ASOPR_EST_TARGET}}</td>
           <td><span class="status-pill {{ASOPR_EST_STATUS_CLASS}}">{{ASOPR_EST_STATUS_LABEL}}</span></td>
@@ -323,7 +316,7 @@
       <thead><tr><th style="width:30%">Indicator</th><th style="width:14%">Reading</th><th style="width:20%">Target</th><th style="width:16%">Status</th><th style="width:10%">Source</th></tr></thead>
       <tbody>
         <tr>
-          <td class="ind-name">Production Cost <span class="caveat">electricity-only</span>
+          <td class="ind-name">Production Cost <span class="caveat">electricity-only</span> <span class="anchor-icon">{{PROD_COST_ANCHOR}}</span>
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Live hashrate/difficulty × Cambridge CBECI's $0.05/kWh assumption + 20 J/TH blended efficiency. Reads lower than "all-in" bank headlines (e.g. JPMorgan's ~$78K), which add hardware depreciation — different scope, not a contradiction.</span></span>
           </td>
           <td class="reading">${{PROD_COST}}<br><span class="caveat">({{PROD_COST_PCT}}% vs. spot)</span></td>
@@ -334,7 +327,7 @@
         <tr>
           <td class="ind-name">Mayer Multiple
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Price ÷ 200-day moving average. Simple, blunt, generic across any asset — lowest weight tier for that reason.</span></span>
-          </td>
+           <span class="anchor-icon">{{MAYER_ANCHOR}}</span></td>
           <td class="reading">{{MAYER}}</td>
           <td class="target">{{MAYER_TARGET}}</td>
           <td><span class="status-pill {{MAYER_STATUS_CLASS}}">{{MAYER_STATUS_LABEL}}</span></td>
@@ -343,7 +336,7 @@
         <tr>
           <td class="ind-name">Drawdown Magnitude <span class="caveat">not scored</span>
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">% below all-time high ($126,296, Oct 2025). <strong>Not counted</strong> — purely descriptive, tells you how far price fell, nothing about whether it's done falling.</span></span>
-          </td>
+           <span class="anchor-icon">{{DRAWDOWN_ANCHOR}}</span></td>
           <td class="reading">{{DRAWDOWN}}%</td>
           <td class="target">{{DRAWDOWN_TARGET}}</td>
           <td><span class="status-pill st-mid">CONTEXT ONLY</span></td>
@@ -361,7 +354,7 @@
         <tr>
           <td class="ind-name">NVT Golden Cross
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Exact CryptoQuant formula: 10d/30d MA spread of Market Cap ÷ Tx Volume, standardized as a z-score against its own 300-day volatility. &gt;2.2 overpriced, &lt;−1.6 bottom zone.</span></span>
-          </td>
+           <span class="anchor-icon">{{NVT_GC_ANCHOR}}</span></td>
           <td class="reading">{{NVT_GC}}</td>
           <td class="target">{{NVT_GC_TARGET}}</td>
           <td><span class="status-pill {{NVT_GC_STATUS_CLASS}}">{{NVT_GC_STATUS_LABEL}}</span></td>
@@ -370,7 +363,7 @@
         <tr>
           <td class="ind-name">Fear &amp; Greed
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Composite sentiment score. Genuine contrarian signal, but can sit at extremes for months — good color, weak standalone trigger.</span></span>
-          </td>
+           <span class="anchor-icon">{{FNG_ANCHOR}}</span></td>
           <td class="reading">{{FNG}} ({{FNG_LABEL}})</td>
           <td class="target">{{FNG_TARGET}}</td>
           <td><span class="status-pill {{FNG_STATUS_CLASS}}">{{FNG_STATUS_LABEL}}</span></td>
@@ -379,7 +372,7 @@
         <tr>
           <td class="ind-name">MACD <span class="caveat">weekly, 12/26/9</span>
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Trend-following crossover — a bullish histogram flip has historically flagged major reversals, including Dec 2022.</span></span>
-          </td>
+           <span class="anchor-icon">{{MACD_ANCHOR}}</span></td>
           <td class="reading">{{MACD}}<br><span class="caveat">cross: {{MACD_CROSSED}}</span></td>
           <td class="target">{{MACD_TARGET}}</td>
           <td><span class="status-pill {{MACD_STATUS_CLASS}}">{{MACD_STATUS_LABEL}}</span></td>
@@ -388,7 +381,7 @@
         <tr>
           <td class="ind-name">Weekly RSI <span class="caveat">14-period</span>
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Classic oversold oscillator — generic across any asset, can stay pinned for months in a strong downtrend.</span></span>
-          </td>
+           <span class="anchor-icon">{{RSI_ANCHOR}}</span></td>
           <td class="reading">{{RSI}}</td>
           <td class="target">{{RSI_TARGET}}</td>
           <td><span class="status-pill {{RSI_STATUS_CLASS}}">{{RSI_STATUS_LABEL}}</span></td>
@@ -397,7 +390,7 @@
         <tr>
           <td class="ind-name">Bollinger %B <span class="caveat">20-week, 2σ</span>
             <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span><span class="tip-content">Where price sits in its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal.</span></span>
-          </td>
+           <span class="anchor-icon">{{BOLLINGER_ANCHOR}}</span></td>
           <td class="reading">{{BOLLINGER}}</td>
           <td class="target">{{BOLLINGER_TARGET}}</td>
           <td><span class="status-pill {{BOLLINGER_STATUS_CLASS}}">{{BOLLINGER_STATUS_LABEL}}</span></td>
@@ -474,7 +467,7 @@
       <div class="section-sub">Every tracked indicator, ranked. Power Law holds veto power and sits outside the weight pool by design.</div>
     </div>
     <table>
-      <thead><tr><th style="width:6%">#</th><th style="width:34%">Indicator</th><th style="width:14%">Weight</th><th style="width:26%">Target</th><th style="width:20%">Status Today</th></tr></thead>
+      <thead><tr><th style="width:5%">#</th><th style="width:27%">Indicator</th><th style="width:14%">Reading</th><th style="width:12%">Weight</th><th style="width:22%">Target</th><th style="width:20%">Status Today</th></tr></thead>
       <tbody>
         {{FULL_WEIGHTED_BREAKDOWN_ROWS}}
       </tbody>
