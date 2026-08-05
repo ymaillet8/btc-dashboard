@@ -1801,10 +1801,20 @@ def main():
     cost_per_btc, pct_vs_cost = compute_production_cost(stats)
     values["PROD_COST"] = cost_per_btc
     values["PROD_COST_PCT"] = pct_vs_cost
-    prod_status = "CHECK"
-    prod_css = "st-mid"
-    if pct_vs_cost is not None:
-        prod_status, prod_css = ("BUY ZONE", "st-buy") if pct_vs_cost < 0 else ("NOT YET", "st-no")
+    # Routed through status_pill() against the actual dollar values (spot
+    # vs. cost_per_btc), not the pre-computed pct_vs_cost against a zero
+    # threshold -- a zero threshold would fall into the same dormant-
+    # leeway trap MVRV Z-Score and MACD currently have (bootstrap-3%-of-
+    # zero is meaningless, so no leeway until real sigma accumulates).
+    # Gets the same near-threshold leeway and strong-buy tier every other
+    # scored indicator gets; still the same WEIGHT_MAP entry/weight as
+    # before -- this is a status-computation fix only, not a scoring one.
+    if cost_per_btc is not None:
+        history_append(cache, "PROD_COST", cost_per_btc)
+    if cost_per_btc is not None and spot_price is not None:
+        prod_status, prod_css = status_pill(spot_price, "low", cost_per_btc, cache=cache, token="PROD_COST")
+    else:
+        prod_status, prod_css = "CHECK", "st-mid"
     values["PROD_COST_STATUS_LABEL"], values["PROD_COST_STATUS_CLASS"] = prod_status, prod_css
     # Same self-referential logic as Realized Price: buy-favorable triggers
     # when spot falls below this estimated production-cost figure.
