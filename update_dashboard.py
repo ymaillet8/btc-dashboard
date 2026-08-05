@@ -41,6 +41,17 @@ HONESTY NOTE ON NVT GOLDEN CROSS AND MINER CAPITULATION: both are
 reconstructions of the standard published methodology using raw free data,
 not a licensed "Golden Cross" or "Miner Capitulation Index" feed from
 LookIntoBitcoin/CryptoQuant. Labeled "(approx.)" on the dashboard.
+
+HONESTY NOTE ON ACTIVE ADDRESSES POWER-LAW DEVIATION: a self-computed
+regression (OLS on log(active addresses) vs. log(days since genesis)),
+grounded in Santostasi's own stated methodology that price, hash rate, and
+active addresses are all power laws of each other and of time. Sourced from
+BGeometrics' own Active Addresses chart data file, NOT the metered
+v1/active-addresses REST endpoint -- verified directly in the API
+Playground that the free tier caps historical range queries on that
+endpoint to the last 4 years, and confirmed on real data that a 4-year-only
+window breaks the regression (produces a negative slope). See the longer
+note above fetch_active_addresses_full_history() below.
 """
 import json
 import math
@@ -382,6 +393,146 @@ def fetch_bg_latest(slug):
     except Exception as e:
         print(f"  ! {slug}: failed — {e}")
     return None
+
+
+# ---------------------------------------------------------------------------
+# 1b. Active Addresses Power-Law Deviation — self-computed, sourced from
+#     BGeometrics but NOT via the metered v1/active-addresses REST endpoint.
+#
+#     Grounded in Santostasi's own stated methodology: Bitcoin's price,
+#     hash rate, and active addresses are "all power laws of each other and
+#     of time," and his fuller model builds a separate Price-vs-Active-
+#     Addresses power law alongside the well-known Price-vs-Time one. This
+#     measures that same relationship from the addresses side: how far
+#     current network adoption sits below (or above) its own long-run
+#     power-law trend against days since genesis.
+#
+#     HONESTY NOTE ON THE DATA SOURCE (verified directly in the BGeometrics
+#     API Playground, Aug 2026, before writing any of this): the v1/active-
+#     addresses REST endpoint genuinely supports startday/endday range
+#     queries -- but the Playground's own Usage Guidelines state the free
+#     tier caps historical range queries to the last 4 years. That cap
+#     isn't just a smaller dataset -- fitting this regression on real data
+#     confirmed it actively breaks the method: the last-4-years-only window
+#     gives a NEGATIVE slope (implying active addresses shrink over time),
+#     failing the basic sanity check that network adoption has grown, not
+#     shrunk, since genesis. The full genesis-to-now history (fit on the
+#     same real data) gives a sane positive slope (~2.5) with R^2 ~0.83.
+#     So this pulls full history from the same static JSON file that feeds
+#     BGeometrics' own public Active Addresses chart
+#     (charts.bgeometrics.com/address_active_dark.html) instead -- genuinely
+#     their data, just via the unmetered file their own chart frontend
+#     reads, rather than the 10/hour-capped REST API. Bonus: this adds zero
+#     calls against that budget, so BG_METRICS' existing 9-of-10 usage
+#     (one spare call already reserved) is untouched.
+# ---------------------------------------------------------------------------
+GENESIS_DATE = date(2009, 1, 3)
+ACTIVE_ADDR_CHART_JSON_URL = "https://charts.bgeometrics.com/files/addresses_active.json"
+
+
+def days_since_genesis_for(d):
+    return (d - GENESIS_DATE).days
+
+
+def fit_power_law(xy_pairs):
+    """Closed-form OLS fit of log(y) = intercept + slope*log(x) -- pure
+    Python, no numpy. slope = covariance(x,y)/variance(x) (population
+    covariance/variance, consistent with compute_stdev() elsewhere in this
+    file). Returns (slope, intercept, r_squared), or (None, None, None) if
+    there isn't enough usable data to fit."""
+    pts = [(x, y) for x, y in xy_pairs if x and x > 0 and y and y > 0]
+    if len(pts) < 30:
+        return None, None, None
+    xs = [math.log(x) for x, _ in pts]
+    ys = [math.log(y) for _, y in pts]
+    n = len(xs)
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    covariance = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / n
+    variance_x = sum((x - mean_x) ** 2 for x in xs) / n
+    if variance_x == 0:
+        return None, None, None
+    slope = covariance / variance_x
+    intercept = mean_y - slope * mean_x
+    ss_res = sum((y - (intercept + slope * x)) ** 2 for x, y in zip(xs, ys))
+    ss_tot = sum((y - mean_y) ** 2 for y in ys)
+    r_squared = (1 - ss_res / ss_tot) if ss_tot else None
+    return slope, intercept, r_squared
+
+
+def predict_power_law(slope, intercept, days):
+    return math.exp(intercept + slope * math.log(days))
+
+
+def fetch_active_addresses_full_history():
+    """Full genesis-to-now (days_since_genesis, active_addresses, date)
+    history, straight from BGeometrics' own chart data file -- see the
+    HONESTY NOTE above for why this is used instead of the metered REST
+    endpoint.
+
+    UNDOCUMENTED-FILE RISK: unlike v1/active-addresses, this JSON file is
+    not a versioned, documented API contract -- it's whatever BGeometrics'
+    own chart frontend happens to fetch today (currently a bare
+    [[unix_ms, value], ...] array). It could silently change shape, move,
+    or disappear with no deprecation notice, unlike a real API endpoint.
+    So this function trusts nothing about the response: a non-list top
+    level, or any entry that doesn't parse as an ordered [ts, value] pair,
+    is treated as a parse failure, never as data. A fetch exception OR an
+    unexpected shape both return [] the same way -- the caller (main())
+    can't tell them apart, which is intentional: both should degrade to
+    the last-known-good cached value (labeled STALE) or, on a true
+    first-ever failure, an honest N/A -- never a loud crash, and never
+    silently-wrong numbers computed from garbage input.
+    """
+    try:
+        raw = _get_json(ACTIVE_ADDR_CHART_JSON_URL)
+    except Exception as e:
+        print(f"  ! active-addresses full history fetch failed: {e}")
+        return []
+    if not isinstance(raw, list):
+        print(f"  ! active-addresses full history: unexpected top-level shape "
+              f"({type(raw).__name__}, expected a list) -- the file may have changed "
+              f"format; treating this as a failed fetch rather than guessing at the data")
+        return []
+    points = []
+    for entry in raw:
+        try:
+            ts_ms, val = entry[0], entry[1]
+            if val is None or val <= 0:
+                continue
+            d = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).date()
+            points.append((days_since_genesis_for(d), float(val), d))
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+    points.sort(key=lambda p: p[0])
+    return points
+
+
+def seed_active_addr_dev_history(cache, points, slope, intercept):
+    """One-time bootstrap: seed the rolling-history cache (the same one
+    rolling_threshold() reads for the percentile threshold) with a
+    deviation value for every historical day in the fetched full-history
+    series, computed under today's regression fit -- so this indicator can
+    have a real percentile threshold from the very first run instead of a
+    90-day wait, per the same rolling-percentile infrastructure Thermocap
+    and NRPL already use. Only runs once: if history has already
+    accumulated for this token (from a prior seed or organic daily
+    appends), this is a no-op -- normal single-value-per-day
+    history_append() takes over from there, identical to every other
+    leeway-enabled indicator. Returns the number of days seeded (0 if it
+    was a no-op or nothing usable was computed)."""
+    hist_key = "ACTIVE_ADDR_DEV__history"
+    if cache.get(hist_key, {}).get("values"):
+        return 0
+    deviations = []
+    for days, val, _ in points:
+        predicted = predict_power_law(slope, intercept, days)
+        if predicted:
+            deviations.append(round((val - predicted) / predicted * 100, 4))
+    deviations = deviations[-HISTORY_MAX_LEN:]
+    if deviations:
+        cache[hist_key] = {"values": deviations}
+    return len(deviations)
 
 
 # ---------------------------------------------------------------------------
@@ -1104,6 +1255,7 @@ DISPLAY_NAMES = {
     "MAYER": "Mayer Multiple", "RSI": "Weekly RSI", "FNG": "Fear & Greed",
     "BOLLINGER": "Bollinger %B", "CYCLE_RHYTHM": "1064/364-Day Cycle Rhythm",
     "DRAWDOWN": "Drawdown Magnitude",
+    "ACTIVE_ADDR_DEV": "Active Addresses Power-Law Deviation",
 }
 
 # Short subtitle shown right after an indicator's name, before its tooltip
@@ -1147,6 +1299,7 @@ TOOLTIP_TEXT = {
     "RSI": 'Classic oversold oscillator — generic across any asset, can stay pinned for months in a strong downtrend.',
     "BOLLINGER": 'Where price sits in its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal.',
     "CYCLE_RHYTHM": 'Calendar-only projection. <strong>Not counted</strong> — a date, not a threshold. Already broke once on the last cycle leg (376–381 vs. claimed 364 days).',
+    "ACTIVE_ADDR_DEV": 'Santostasi\'s own model states Bitcoin\'s price, hash rate, and active addresses are "all power laws of each other and of time" — this fits active addresses to its own power-law trend (OLS regression of log(addresses) vs. log(days since genesis), R&sup2; ≈ 0.83 on the full genesis-to-now fit) and measures how far today sits below that trend. Sourced from BGeometrics\' own chart data file, not their versioned API — an unofficial source, flagged as such deliberately. No fixed published threshold exists, so like Thermocap/NRPL this computes its own: the bottom 10th percentile of its own trailing daily history. Scored at reduced (Tier 3) weight — a genuinely novel construction with no track record against past cycle bottoms yet.',
 }
 
 # (url_or_None, link_text) for every tracked indicator's Source column.
@@ -1174,6 +1327,7 @@ SOURCE_URL = {
     "RSI": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
     "BOLLINGER": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
     "CYCLE_RHYTHM": (None, "pure date math"),
+    "ACTIVE_ADDR_DEV": ("https://charts.bgeometrics.com/address_active_dark.html", "view"),
 }
 
 # Per-token reading-cell formatters, ported verbatim from the richer
@@ -1191,6 +1345,7 @@ READING_FORMATTERS = {
     "FNG": lambda v: f"{v.get('FNG', '—')} ({v.get('FNG_LABEL', '—')})",
     "MACD": lambda v: f"{v.get('MACD', '—')}<br><span class=\"caveat\">cross: {v.get('MACD_CROSSED', '—')}</span>",
     "CYCLE_RHYTHM": lambda v: f"{v.get('DAYS_SINCE_TOP', '—')}d since top",
+    "ACTIVE_ADDR_DEV": lambda v: f"{v.get('ACTIVE_ADDR_DEV', '—')}%",
 }
 
 
@@ -1243,6 +1398,7 @@ TARGET_LABELS = {
     "NRPL":          "No citable historical bottom value found (checked directly) \u2014 live percentile is the only real threshold, no illustrative fallback",
     "DRAWDOWN":      "\u2264 \u221277% (shallow edge of the \u221277% to \u221283% cycle-bottom analog range; analog-based, not weighted)",
     "MINER_CAP":     "Hash Ribbons \u201cBUY SIGNAL\u201d state (recovery + price MA confirmed)",
+    "ACTIVE_ADDR_DEV": "No citable historical bottom value found (novel construction) \u2014 live percentile is the only real threshold, no illustrative fallback",
 }
 
 
@@ -1264,7 +1420,7 @@ def target_for(token):
 # what the weights actually said. A derived rank can't drift again.
 _ALL_TRACKED_TOKENS = [
     "MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
-    "LTH_SOPR", "PROD_COST", "NRPL", "ASOPR_EST", "NVT_GC",
+    "LTH_SOPR", "PROD_COST", "NRPL", "ACTIVE_ADDR_DEV", "ASOPR_EST", "NVT_GC",
     "MINER_CAP", "MACD", "SUPPLY_LOSS", "MAYER", "RSI", "FNG", "BOLLINGER",
     "DRAWDOWN", "CYCLE_RHYTHM",
 ]
@@ -1292,6 +1448,7 @@ EXCLUSION_REASONS = {
     "REALIZED_PRICE": "Redundant — same core ratio as MVRV Z-Score, just un-normalized",
     "THERMOCAP": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
     "NRPL": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
+    "ACTIVE_ADDR_DEV": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
     "DRAWDOWN": "Analog-based threshold (past cycle-bottom range), not a mathematically-derived one — shown live, not weighted",
     "CYCLE_RHYTHM": "A calendar date, not a threshold — nothing to score",
 }
@@ -1309,6 +1466,7 @@ DISPLAYABLE_BUT_UNWEIGHTED = {"REALIZED_PRICE", "DRAWDOWN"}
 NO_SIGNAL_STATUS = {
     "THERMOCAP": ("BUILDING HISTORY", "st-mid"),
     "NRPL": ("BUILDING HISTORY", "st-mid"),
+    "ACTIVE_ADDR_DEV": ("BUILDING HISTORY", "st-mid"),
     "CYCLE_RHYTHM": ("NOT A THRESHOLD", "st-mid"),
 }
 
@@ -1468,7 +1626,8 @@ def build_weight_pie_svg(values):
 CORE_TOKENS = ("MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
                "LTH_SOPR", "NRPL", "SUPPLY_LOSS", "ASOPR_EST")
 SELF_COMPUTED_TOKENS = ("PROD_COST", "MAYER", "DRAWDOWN", "MINER_CAP", "NVT_GC",
-                         "FNG", "MACD", "RSI", "BOLLINGER", "CYCLE_RHYTHM")
+                         "FNG", "MACD", "RSI", "BOLLINGER", "CYCLE_RHYTHM",
+                         "ACTIVE_ADDR_DEV")
 
 
 def _count_bucket(values, tokens):
@@ -1623,17 +1782,64 @@ def main():
         values[f"{token}_TARGET"] = target_for(token)
         print(f"  {token} ({slug}): {values[token]} -> {label}")
 
-    # Rolling-percentile thresholds for Thermocap and NRPL — see the long
-    # comment above rolling_threshold() for the research this is grounded
-    # in. Researched historical-cycle reference values (2018/19 & 2022
-    # bottoms) shown alongside the accumulation progress below, purely as
-    # comparison context — never used as the live scoring threshold, and
-    # honestly reported where no citable number exists.
+    # Active Addresses Power-Law Deviation — see the HONESTY NOTE above
+    # fetch_active_addresses_full_history() for why this pulls BGeometrics'
+    # own chart data file rather than the metered REST endpoint. Computed
+    # here, before the PERCENTILE_ELIGIBLE loop below, so it can join that
+    # same generic rolling-percentile/WEIGHT_MAP machinery Thermocap and
+    # NRPL already use — no separate mechanism needed.
+    print("Fetching full Active Addresses history (BGeometrics chart data, unmetered)...")
+    aa_points = fetch_active_addresses_full_history()
+    if aa_points:
+        aa_slope, aa_intercept, aa_r2 = fit_power_law([(d, v) for d, v, _ in aa_points])
+        if aa_slope is not None:
+            today_days, today_val, today_date = aa_points[-1]
+            today_pred = predict_power_law(aa_slope, aa_intercept, today_days)
+            aa_deviation = round((today_val - today_pred) / today_pred * 100, 2) if today_pred else None
+            print(f"  Power-law fit: slope={aa_slope:.4f} intercept={aa_intercept:.4f} "
+                  f"R2={aa_r2:.4f} (n={len(aa_points)} days, {aa_points[0][2]} -> {today_date})")
+            print(f"  Today ({today_date}): active_addresses={today_val:.0f}, "
+                  f"predicted={today_pred:.0f}, deviation={aa_deviation}%")
+            seeded_n = seed_active_addr_dev_history(cache, aa_points, aa_slope, aa_intercept)
+            if seeded_n:
+                print(f"  Seeded rolling-history cache with {seeded_n} historical daily deviations")
+            values["ACTIVE_ADDR_DEV"] = aa_deviation
+            if aa_deviation is not None:
+                cache_store(cache, "ACTIVE_ADDR_DEV", aa_deviation)
+                if not seeded_n:
+                    # History already existed (post-bootstrap) — normal
+                    # single-value-per-day append, identical to every other
+                    # leeway-enabled indicator. Skipped on the seeding run
+                    # itself so today's value isn't double-counted on top
+                    # of the bulk seed, which already includes it.
+                    history_append(cache, "ACTIVE_ADDR_DEV", aa_deviation)
+        else:
+            print("  ! not enough usable points to fit a power law — ACTIVE_ADDR_DEV staying N/A")
+            values["ACTIVE_ADDR_DEV"] = None
+    else:
+        cached_val, cached_date = cache_lookup(cache, "ACTIVE_ADDR_DEV")
+        if cached_val is not None:
+            values["ACTIVE_ADDR_DEV"] = cached_val
+            values["ACTIVE_ADDR_DEV_STATUS_LABEL"] = f"STALE ({cached_date})"
+            values["ACTIVE_ADDR_DEV_STATUS_CLASS"] = "st-mid"
+            print(f"  ACTIVE_ADDR_DEV: live fetch failed, using cached value from {cached_date}")
+        else:
+            values["ACTIVE_ADDR_DEV"] = None
+            print("  ACTIVE_ADDR_DEV: live fetch failed and no cached fallback available")
+
+    # Rolling-percentile thresholds for Thermocap, NRPL, and Active
+    # Addresses Power-Law Deviation — see the long comment above
+    # rolling_threshold() for the research this is grounded in. Researched
+    # historical-cycle reference values (2018/19 & 2022 bottoms) shown
+    # alongside the accumulation progress below, purely as comparison
+    # context — never used as the live scoring threshold, and honestly
+    # reported where no citable number exists.
     HISTORICAL_REFERENCE = {
         "THERMOCAP": "~4x at 2018/19 & 2022 bottoms (Glassnode-sourced)",
         "NRPL": "no citable historical bottom value found (checked directly)",
+        "ACTIVE_ADDR_DEV": "no citable historical bottom value found (novel construction, checked directly)",
     }
-    PERCENTILE_ELIGIBLE = ("THERMOCAP", "NRPL")
+    PERCENTILE_ELIGIBLE = ("THERMOCAP", "NRPL", "ACTIVE_ADDR_DEV")
     for token in PERCENTILE_ELIGIBLE:
         fresh_val = values.get(token)
         # History is already recorded generically in the BG_METRICS loop
