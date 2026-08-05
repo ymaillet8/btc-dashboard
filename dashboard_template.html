@@ -97,9 +97,11 @@
   .reading{font-family:var(--mono); font-size:15px; font-weight:600;}
   .target{font-family:var(--mono); font-size:13px; color:var(--text-dim);}
   .status-pill{
-    display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:999px;
-    font-family:var(--mono); font-size:11.5px; font-weight:600; white-space:nowrap;
+    display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:14px;
+    font-family:var(--mono); font-size:11.5px; font-weight:600; white-space:normal; line-height:1.4;
+    max-width:280px;
   }
+  .st-strong-buy{background:#1fae63; color:#ffffff;}
   .st-buy{background:var(--green-dim); color:var(--green);}
   .st-no{background:var(--red-dim); color:var(--red);}
   .st-mid{background:var(--amber-dim); color:var(--amber);}
@@ -127,6 +129,11 @@
   }
 
   .table-source-line{font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:10px;}
+
+  /* --- Weight distribution pie --- */
+  .pie-wrap{display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:28px;}
+  .pie-caption{font-size:13px; color:var(--text-dim); text-align:center; max-width:440px;}
+  .pie-wrap svg path{stroke:var(--bg); stroke-width:1.5;}
 
   /* --- Hover tooltips (CSS-only) --- */
   .tip-wrap{position:relative; display:inline-flex; align-items:center;}
@@ -217,6 +224,10 @@
       <div class="section-num">§1 · WEIGHTED SYNTHESIS</div>
       <div class="section-title">Full Rank &amp; Weight</div>
       <div class="section-sub">Every tracked indicator, ranked by actual current weight, heaviest first — the primary content of this page. Power Law holds veto power and sits outside the weight pool by design. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight.</div>
+    </div>
+    <div class="pie-wrap">
+      <div class="pie-caption">Each slice is an indicator's share of the weighted verdict — colored in if it's currently a buy signal, grey if not.</div>
+      {{WEIGHT_PIE_SVG}}
     </div>
     <table>
       <thead><tr><th style="width:5%">#</th><th style="width:23%">Indicator</th><th style="width:12%">Reading</th><th style="width:9%">Weight</th><th style="width:19%">Target</th><th style="width:17%">Status Today</th><th style="width:15%">Source</th></tr></thead>

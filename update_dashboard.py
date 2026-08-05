@@ -43,6 +43,7 @@ not a licensed "Golden Cross" or "Miner Capitulation Index" feed from
 LookIntoBitcoin/CryptoQuant. Labeled "(approx.)" on the dashboard.
 """
 import json
+import math
 import os
 import urllib.request
 import urllib.error
@@ -190,6 +191,13 @@ NEAR_STDEV_MIN_DAYS = 20     # fewer points needed than a percentile (MIN_HISTOR
 NEAR_BAND_STDEV_FRACTION = 0.25   # width of the "near" zone, in units of the indicator's own trailing sigma
 NEAR_BAND_BOOTSTRAP_PCT = 0.03    # provisional flat 3% fallback only until real sigma exists
 
+# 2 sigma is real quant convention for "statistically uncommon" (~95th
+# percentile under normal assumptions), not 1 sigma, which the same
+# sources (SpotGamma, NinjaTrader, an open quant-strategies repo) note is
+# ordinary day-to-day movement. Used to distinguish a reading that just
+# crossed its threshold from one that blew through it.
+STRONG_BUY_STDEV_FRACTION = 2.0
+
 
 def compute_stdev(values):
     """Population standard deviation, dependency-free (no numpy)."""
@@ -200,6 +208,25 @@ def compute_stdev(values):
     return variance ** 0.5
 
 
+def get_effective_sigma(cache, token, threshold):
+    """Shared sigma source for both the leeway band and the strong-buy
+    tier, so the two stay consistent rather than each having its own
+    definition of "normal" for the same indicator. Real trailing stdev
+    once >=20 days of history exist; a small flat-percentage bootstrap
+    estimate before then. Returns (None, None) if no defensible estimate
+    can be made yet (e.g. a zero threshold with too little history -- a
+    percentage of zero is meaningless)."""
+    hist_key = f"{token}__history"
+    values = cache.get(hist_key, {}).get("values", [])
+    if len(values) >= NEAR_STDEV_MIN_DAYS:
+        sigma = compute_stdev(values)
+        if sigma:
+            return sigma, f"n={len(values)}"
+    if threshold not in (0, None):
+        return abs(threshold) * NEAR_BAND_BOOTSTRAP_PCT, "provisional 3%-of-threshold estimate"
+    return None, None
+
+
 def near_threshold_band(cache, token, threshold):
     """Returns (band_width, source_label) — how far past the threshold a
     reading can sit and still count as "near." Prefers a real trailing
@@ -207,16 +234,18 @@ def near_threshold_band(cache, token, threshold):
     clearly-labeled flat percentage before then. Returns (None, None) if
     no defensible band can be computed yet (e.g. a zero threshold with too
     little history — 3% of zero is meaningless, so no leeway is granted
-    rather than fabricating one)."""
-    hist_key = f"{token}__history"
-    values = cache.get(hist_key, {}).get("values", [])
-    if len(values) >= NEAR_STDEV_MIN_DAYS:
-        sigma = compute_stdev(values)
-        if sigma:
-            return sigma * NEAR_BAND_STDEV_FRACTION, f"\u00b1{NEAR_BAND_STDEV_FRACTION}\u03c3 (n={len(values)})"
-    if threshold not in (0, None):
-        return abs(threshold) * NEAR_BAND_BOOTSTRAP_PCT, "provisional 3%"
-    return None, None
+    rather than fabricating one). Built on get_effective_sigma() so the
+    two share one definition of "how much this indicator naturally
+    wobbles" -- the real-sigma case scales it to a tighter band
+    (NEAR_BAND_STDEV_FRACTION of sigma); the bootstrap case is already
+    the right-sized band as-is (no further scaling), matching this
+    function's pre-existing behavior exactly."""
+    sigma, source = get_effective_sigma(cache, token, threshold)
+    if sigma is None:
+        return None, None
+    if source.startswith("n="):
+        return sigma * NEAR_BAND_STDEV_FRACTION, f"\u00b1{NEAR_BAND_STDEV_FRACTION}\u03c3 ({source})"
+    return sigma, "provisional 3%"
 
 # token -> (endpoint slug [best guess, unverified], direction, threshold)
 BG_METRICS = {
@@ -970,12 +999,15 @@ def _distance_note(v, threshold, direction):
 
 def status_pill(value, direction, threshold, cache=None, token=None):
     """direction='low': buy-favorable at or below threshold. direction='high':
-    buy-favorable at or above threshold. If cache+token are supplied, also
-    checks near_threshold_band() — a reading just outside the threshold,
-    within that band, still counts as buy-favorable but is labeled and
-    styled distinctly (st-near, not st-buy) so it's never mistaken for a
-    clean, fully-crossed reading. Omit cache/token for the old, exact-only
-    behavior."""
+    buy-favorable at or above threshold. Four tiers when cache+token are
+    supplied: a reading that crossed by >=STRONG_BUY_STDEV_FRACTION sigma
+    (via get_effective_sigma()) is st-strong-buy -- a real buy signal,
+    just a stronger one, counted identically to st-buy everywhere. A
+    reading just outside the threshold, within near_threshold_band(),
+    still counts as buy-favorable but is labeled and styled distinctly
+    (st-near, "BORDERLINE BUY") so it's never mistaken for a clean,
+    fully-crossed reading -- but it IS a real buy signal, not a maybe.
+    Omit cache/token for the old, exact-only two-tier behavior."""
     if value is None or direction is None or threshold is None:
         return "CHECK", "st-mid"
     try:
@@ -985,20 +1017,28 @@ def status_pill(value, direction, threshold, cache=None, token=None):
 
     if direction == "low":
         if v <= threshold:
+            if cache is not None and token is not None:
+                sigma, source = get_effective_sigma(cache, token, threshold)
+                if sigma and (threshold - v) >= STRONG_BUY_STDEV_FRACTION * sigma:
+                    return f"STRONG BUY ({STRONG_BUY_STDEV_FRACTION}σ+, {source})", "st-strong-buy"
             return "BUY ZONE", "st-buy"
         if cache is not None and token is not None:
             band, source = near_threshold_band(cache, token, threshold)
             if band is not None and v <= threshold + band:
-                return f"NEAR THRESHOLD ({source})", "st-near"
+                return f"BORDERLINE BUY ({source})", "st-near"
         return f"NOT YET{_distance_note(v, threshold, direction)}", "st-no"
 
     if direction == "high":
         if v >= threshold:
+            if cache is not None and token is not None:
+                sigma, source = get_effective_sigma(cache, token, threshold)
+                if sigma and (v - threshold) >= STRONG_BUY_STDEV_FRACTION * sigma:
+                    return f"STRONG BUY ({STRONG_BUY_STDEV_FRACTION}σ+, {source})", "st-strong-buy"
             return "ELEVATED", "st-buy"
         if cache is not None and token is not None:
             band, source = near_threshold_band(cache, token, threshold)
             if band is not None and v >= threshold - band:
-                return f"NEAR THRESHOLD ({source})", "st-near"
+                return f"BORDERLINE BUY ({source})", "st-near"
         return f"NORMAL{_distance_note(v, threshold, direction)}", "st-no"
 
     return "CHECK", "st-mid"
@@ -1325,10 +1365,12 @@ def build_full_weighted_breakdown(values):
         if show_real_status:
             css = values.get(f"{token}_STATUS_CLASS")
             label = values.get(f"{token}_STATUS_LABEL", "CHECK")
-            if css == "st-buy":
+            if css == "st-strong-buy":
+                status_text, status_css = "STRONG BUY", "st-strong-buy"
+            elif css == "st-buy":
                 status_text, status_css = "BUY-FAVORABLE", "st-buy"
             elif css == "st-near":
-                status_text, status_css = "NEAR-THRESHOLD", "st-near"
+                status_text, status_css = "BORDERLINE BUY", "st-near"
             elif css == "st-watch":
                 status_text, status_css = label, "st-watch"
             elif css == "st-no":
@@ -1368,6 +1410,59 @@ def build_full_weighted_breakdown(values):
     return "\n".join(rows)
 
 
+# Colors: st-strong-buy/st-buy/st-near get their own color (a fired slice
+# reads as fired at a glance); everything else (st-no/st-mid/st-watch)
+# falls back to muted grey -- deliberately not enumerated per-class,
+# since "not currently fired" should look the same regardless of why.
+PIE_COLOR_MAP = {"st-strong-buy": "#1fae63", "st-buy": "#3ddc9a", "st-near": "#6ba9fa"}
+PIE_GREY = "#3a4150"
+
+
+def build_weight_pie_svg(values):
+    """Inline SVG (no JS charting library, this is a static HTML page) --
+    one slice per currently-weighted indicator, sized by its share of the
+    total weight pool, colored by whether it's fired today. Unweighted
+    indicators (Realized Price, Thermocap pre-bootstrap, etc.) have no
+    meaningful weight share and get no slice.
+
+    Slice boundaries are computed from a running WEIGHT total divided by
+    the grand total at each step -- not by repeatedly adding pre-divided
+    fractional degrees -- so floating-point rounding can't accumulate
+    across slices. Since the final running total always equals the grand
+    total exactly (same float value divided by itself is exactly 1.0 in
+    IEEE754), the last slice's end angle is always exactly 360.0, closing
+    the circle with no gap or overlap regardless of how many slices
+    precede it or how their individual fractions round."""
+    slices = [(DISPLAY_NAMES.get(t, t), w, values.get(f"{t}_STATUS_CLASS", "st-mid"))
+              for t, w in WEIGHT_MAP.items()]
+    total = sum(w for _, w, _ in slices)
+    cx, cy, r = 150, 150, 120
+    fired_count = sum(1 for _, _, css in slices if css in ("st-strong-buy", "st-buy", "st-near"))
+
+    paths = []
+    cum_weight = 0.0
+    angle = 0.0
+    for label, weight, css in slices:
+        cum_weight += weight
+        start = angle
+        end = (cum_weight / total) * 360
+        angle = end
+        large_arc = 1 if (end - start) > 180 else 0
+        sx = cx + r * math.sin(math.radians(start)); sy = cy - r * math.cos(math.radians(start))
+        ex = cx + r * math.sin(math.radians(end)); ey = cy - r * math.cos(math.radians(end))
+        color = PIE_COLOR_MAP.get(css, PIE_GREY)
+        frac = weight / total
+        paths.append(
+            f'<path d="M{cx},{cy} L{sx:.2f},{sy:.2f} A{r},{r} 0 {large_arc},1 {ex:.2f},{ey:.2f} Z" '
+            f'fill="{color}"><title>{label}: {round(frac * 100, 1)}%</title></path>'
+        )
+    center_text = (
+        f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="middle" '
+        f'fill="white" font-size="20">{fired_count}/{len(slices)} fired</text>'
+    )
+    return f'<svg viewBox="0 0 300 300" width="260" height="260">{"".join(paths)}{center_text}</svg>'
+
+
 # Matches the two live-indicator table sections in the template exactly —
 # used only for the summary counts below, not for scoring itself.
 CORE_TOKENS = ("MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "THERMOCAP",
@@ -1383,7 +1478,7 @@ def _count_bucket(values, tokens):
     near-threshold reading (st-near) counts as buy-favorable here too,
     same treatment as the main verdict."""
     scored = [t for t in tokens if t in WEIGHT_MAP]
-    buy = [t for t in scored if values.get(f"{t}_STATUS_CLASS") in ("st-buy", "st-near")]
+    buy = [t for t in scored if values.get(f"{t}_STATUS_CLASS") in ("st-strong-buy", "st-buy", "st-near")]
     n_scored = len(scored)
     n_buy = len(buy)
     pct = round((n_buy / n_scored) * 100, 1) if n_scored else 0.0
@@ -1432,15 +1527,18 @@ def build_verdict(values):
     for token, weight in WEIGHT_MAP.items():
         css = values.get(f"{token}_STATUS_CLASS")
         name = DISPLAY_NAMES.get(token, token)
-        if css == "st-buy":
+        if css in ("st-strong-buy", "st-buy"):
+            # A strong-buy reading (crossed by >=2 sigma) counts exactly
+            # like a normal buy-favorable one here -- it's a real signal,
+            # just a stronger one, not a separate scoring tier.
             scored.append((token, weight, True))
             buy_names.append(name)
         elif css == "st-near":
-            # Near-threshold leeway: counts as buy-favorable per your own
-            # call, but visibly marked so it's never confused with a
-            # clean, fully-crossed reading.
+            # Near-threshold leeway (BORDERLINE BUY): counts as
+            # buy-favorable per your own call, but visibly marked so it's
+            # never confused with a clean, fully-crossed reading.
             scored.append((token, weight, True))
-            buy_names.append(f"{name} (near-threshold)")
+            buy_names.append(f"{name} (borderline)")
         elif css == "st-no":
             scored.append((token, weight, False))
         else:
@@ -1732,8 +1830,8 @@ def main():
     # meaningfully different from "no data" — just not a confirmed trigger.
     mc_label_map = {
         "BUY SIGNAL": ("BUY", "st-buy"),
-        "CAPITULATION": ("CAPITULATION (watch)", "st-watch"),
-        "RECOVERING": ("RECOVERING (watch)", "st-watch"),
+        "CAPITULATION": ("CAPITULATION — watching for hashrate to turn up (30d MA to cross back above 60d MA)", "st-watch"),
+        "RECOVERING": ("RECOVERING — watching for price momentum to confirm (10d MA to cross above 20d MA)", "st-watch"),
     }
     mc_label, mc_css = mc_label_map.get(mc_state, ("CHECK", "st-mid"))
     values["MINER_CAP_STATUS_LABEL"] = mc_label
@@ -1815,6 +1913,7 @@ def main():
 
     print("Building weighted verdict synthesis...")
     values["FULL_WEIGHTED_BREAKDOWN_ROWS"] = build_full_weighted_breakdown(values)
+    values["WEIGHT_PIE_SVG"] = build_weight_pie_svg(values)
     values["TOTAL_TRACKED_COUNT"] = len(_ALL_TRACKED_TOKENS) + 1  # +1 for Power Law, always rank 1
     verdict = build_verdict(values)
     values.update(verdict)
