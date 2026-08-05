@@ -1099,7 +1099,7 @@ TOOLTIP_TEXT = {
     "ASOPR_EST": 'SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode\'s own published mechanism, not a raw substitute for the real metric.',
     "PROD_COST": 'Live hashrate/difficulty × Cambridge CBECI\'s $0.05/kWh assumption + 20 J/TH blended efficiency. Reads lower than "all-in" bank headlines (e.g. JPMorgan\'s ~$78K), which add hardware depreciation — different scope, not a contradiction.',
     "MAYER": 'Price ÷ 200-day moving average. Simple, blunt, generic across any asset — lowest weight tier for that reason.',
-    "DRAWDOWN": "% below all-time high ($126,296, Oct 2025). <strong>Not counted</strong> — purely descriptive, tells you how far price fell, nothing about whether it's done falling.",
+    "DRAWDOWN": "% below all-time high ($126,296, Oct 2025). Buy-favorable at or beyond -77% (the shallow edge of the past-cycle-bottom analog range). <strong>Not weighted</strong> — an analog-based threshold, not a mathematically-derived one, so it gets a real live status but no scoring weight.",
     "MINER_CAP": "Charles Edwards' full original methodology: 30d/60d hashrate MA cross for capitulation/recovery, confirmed by 10d/20d price MA momentum for the real buy signal — not just the raw hashrate spread.",
     "NVT_GC": 'Exact CryptoQuant formula: 10d/30d MA spread of Market Cap ÷ Tx Volume, standardized as a z-score against its own 300-day volatility. &gt;2.2 overpriced, &lt;−1.6 bottom zone.',
     "FNG": 'Composite sentiment score. Genuine contrarian signal, but can sit at extremes for months — good color, weak standalone trigger.',
@@ -1201,7 +1201,7 @@ TARGET_LABELS = {
     "BOLLINGER":     "\u2264 0.2 (near lower band)",
     "THERMOCAP":     "\u2264 ~4x (2018/19 & 2022 bottom analog, Glassnode-sourced \u2014 reference only, live percentile is the real threshold once active)",
     "NRPL":          "No citable historical bottom value found (checked directly) \u2014 live percentile is the only real threshold, no illustrative fallback",
-    "DRAWDOWN":      "\u221277% to \u221283% (past cycle-bottom range, descriptive only)",
+    "DRAWDOWN":      "\u2264 \u221277% (shallow edge of the \u221277% to \u221283% cycle-bottom analog range; analog-based, not weighted)",
     "MINER_CAP":     "Hash Ribbons \u201cBUY SIGNAL\u201d state (recovery + price MA confirmed)",
 }
 
@@ -1252,8 +1252,24 @@ EXCLUSION_REASONS = {
     "REALIZED_PRICE": "Redundant — same core ratio as MVRV Z-Score, just un-normalized",
     "THERMOCAP": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
     "NRPL": "Building a rolling percentile threshold from live data — joins scoring once enough history accumulates",
-    "DRAWDOWN": "Descriptive by nature — a % fallen, not a level to cross",
+    "DRAWDOWN": "Analog-based threshold (past cycle-bottom range), not a mathematically-derived one — shown live, not weighted",
     "CYCLE_RHYTHM": "A calendar date, not a threshold — nothing to score",
+}
+
+# Two genuinely different reasons a token can be excluded from WEIGHT_MAP,
+# which must not be visually conflated (that conflation was the bug this
+# fixes): some tokens have a real, live-computed buy/not-yet signal that's
+# just not being weighted (redundancy or lower analog-confidence); others
+# have no number to compare against at all right now. DISPLAYABLE_BUT_
+# UNWEIGHTED tokens get their real STATUS_LABEL/STATUS_CLASS shown, same
+# as a weighted row would; anything else excluded falls back to
+# NO_SIGNAL_STATUS (a token-specific label) or, failing that, "NOT SCORED".
+DISPLAYABLE_BUT_UNWEIGHTED = {"REALIZED_PRICE", "DRAWDOWN"}
+
+NO_SIGNAL_STATUS = {
+    "THERMOCAP": ("BUILDING HISTORY", "st-mid"),
+    "NRPL": ("BUILDING HISTORY", "st-mid"),
+    "CYCLE_RHYTHM": ("NOT A THRESHOLD", "st-mid"),
 }
 
 
@@ -1305,10 +1321,8 @@ def build_full_weighted_breakdown(values):
         src_url, src_label = SOURCE_URL.get(token, (None, "—"))
         source_html = f'<a href="{src_url}" target="_blank">{src_label}</a>' if src_url else src_label
 
-        if is_weighted:
-            weight = WEIGHT_MAP[token]
-            pct_of_total = round((weight / sum(WEIGHT_MAP.values())) * 100, 1)
-            weight_display = f"{pct_of_total}%"
+        show_real_status = is_weighted or token in DISPLAYABLE_BUT_UNWEIGHTED
+        if show_real_status:
             css = values.get(f"{token}_STATUS_CLASS")
             label = values.get(f"{token}_STATUS_LABEL", "CHECK")
             if css == "st-buy":
@@ -1323,6 +1337,15 @@ def build_full_weighted_breakdown(values):
                 status_text, status_css = label, "st-mid"
             else:
                 status_text, status_css = "NO READING TODAY", "st-mid"
+        elif token in NO_SIGNAL_STATUS:
+            status_text, status_css = NO_SIGNAL_STATUS[token]
+        else:
+            status_text, status_css = "NOT SCORED", "st-mid"
+
+        if is_weighted:
+            weight = WEIGHT_MAP[token]
+            pct_of_total = round((weight / sum(WEIGHT_MAP.values())) * 100, 1)
+            weight_display = f"{pct_of_total}%"
             rows.append(
                 f'<tr><td class="rank-num">{i}</td><td class="ind-name">{name_cell}</td>'
                 f'<td class="reading">{reading_val}</td>'
@@ -1339,7 +1362,7 @@ def build_full_weighted_breakdown(values):
                 f'<td class="reading">{reading_val}</td>'
                 f'<td class="reading">N/A</td>'
                 f'<td class="target">{target}</td>'
-                f'<td><span class="status-pill st-mid">NOT SCORED</span></td>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span></td>'
                 f'<td class="ind-source">{source_html}</td></tr>'
             )
     return "\n".join(rows)
@@ -1592,8 +1615,12 @@ def main():
     price_history = fetch_coingecko_history(days=340)
     spot_price = price_history[-1] if price_history else None
 
-    # Give Realized Price a real dynamic signal now (was a static label before):
-    # buy-favorable when spot trades below the realized-price cost basis.
+    # Realized Price: buy-favorable when spot trades below the realized-
+    # price cost basis. Routed through status_pill() (not a hand-rolled
+    # binary check) so it gets the same near-threshold leeway and
+    # distance-from-threshold reporting every other scored indicator
+    # gets — still excluded from WEIGHT_MAP (redundant with MVRV Z-Score),
+    # this only changes what status gets displayed, not scoring.
     # Skip the fresh comparison if the realized-price figure itself is a
     # stale cache fallback — don't compare today's live spot price against
     # a days-old cost-basis snapshot and present it with fresh confidence.
@@ -1604,7 +1631,7 @@ def main():
     elif realized_price_val is not None and spot_price is not None:
         try:
             rp = float(realized_price_val)
-            rp_label, rp_css = ("BUY ZONE", "st-buy") if spot_price < rp else ("NOT YET", "st-no")
+            rp_label, rp_css = status_pill(spot_price, "low", rp, cache=cache, token="REALIZED_PRICE")
         except (TypeError, ValueError):
             rp_label, rp_css = "CHECK", "st-mid"
     else:
@@ -1629,6 +1656,18 @@ def main():
     label, css = status_pill(mayer, "low", 1.0, cache=cache, token="MAYER")
     values["MAYER_STATUS_LABEL"], values["MAYER_STATUS_CLASS"] = label, css
     values["MAYER_TARGET"] = target_for("MAYER")
+
+    # Drawdown Magnitude: buy-favorable at or beyond -77% from ATH -- the
+    # shallow edge of the existing "-77% to -83%" historical-analog range
+    # (anything beyond -77% is still inside that analog zone). Routed
+    # through status_pill() for the same near-threshold leeway every other
+    # scored indicator gets. Still excluded from WEIGHT_MAP -- this is an
+    # analog-based signal, not a mathematically-derived threshold, and
+    # shouldn't carry the same confidence as one that is.
+    if drawdown is not None:
+        history_append(cache, "DRAWDOWN", drawdown)
+    dd_label, dd_css = status_pill(drawdown, "low", -77.0, cache=cache, token="DRAWDOWN")
+    values["DRAWDOWN_STATUS_LABEL"], values["DRAWDOWN_STATUS_CLASS"] = dd_label, dd_css
     values["DRAWDOWN_TARGET"] = target_for("DRAWDOWN")
     print(f"  Mayer Multiple: {mayer} | Drawdown from ATH: {drawdown}%")
 
