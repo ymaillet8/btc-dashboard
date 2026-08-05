@@ -199,6 +199,7 @@ def rolling_threshold(cache, key):
 # rolling-history cache already built for the percentile thresholds.
 NEAR_STDEV_MIN_DAYS = 20     # fewer points needed than a percentile (MIN_HISTORY_DAYS=90) —
                              # a standard deviation estimate stabilizes faster than a reliable tail percentile
+NEAR_STDEV_PARTIAL_MIN_DAYS = 3   # floor below which even a real stdev is too noisy to trust at all
 NEAR_BAND_STDEV_FRACTION = 0.25   # width of the "near" zone, in units of the indicator's own trailing sigma
 NEAR_BAND_BOOTSTRAP_PCT = 0.03    # provisional flat 3% fallback only until real sigma exists
 
@@ -223,16 +224,30 @@ def get_effective_sigma(cache, token, threshold):
     """Shared sigma source for both the leeway band and the strong-buy
     tier, so the two stay consistent rather than each having its own
     definition of "normal" for the same indicator. Real trailing stdev
-    once >=20 days of history exist; a small flat-percentage bootstrap
-    estimate before then. Returns (None, None) if no defensible estimate
-    can be made yet (e.g. a zero threshold with too little history -- a
-    percentage of zero is meaningless)."""
+    once >=20 days of history exist. Below that, a zero/None-threshold
+    indicator (MVRV Z-Score, MACD) can't use the flat-percentage bootstrap
+    below at all -- 3% of zero is meaningless -- so it used to stay fully
+    dormant (no leeway whatsoever) until 20 days accumulated. That's a
+    real gap: a real, if noisier, stdev is computable from as few as 3
+    points and is still a genuine measurement, not a guess. So a
+    zero/None-threshold indicator with 3-19 days of history now gets that
+    partial-sample stdev, clearly labeled as lower-confidence. A
+    non-zero-threshold indicator in that same 3-19 day range is
+    unaffected -- it already had a real (if provisional) band via the 3%
+    bootstrap below, and that path is untouched. Returns (None, None) only
+    when truly nothing defensible can be built yet (zero/None threshold,
+    fewer than 3 days)."""
     hist_key = f"{token}__history"
     values = cache.get(hist_key, {}).get("values", [])
-    if len(values) >= NEAR_STDEV_MIN_DAYS:
+    n = len(values)
+    if n >= NEAR_STDEV_MIN_DAYS:
         sigma = compute_stdev(values)
         if sigma:
-            return sigma, f"n={len(values)}"
+            return sigma, f"n={n}"
+    if threshold in (0, None) and n >= NEAR_STDEV_PARTIAL_MIN_DAYS:
+        sigma = compute_stdev(values)
+        if sigma:
+            return sigma, f"provisional, n={n} (partial sample)"
     if threshold not in (0, None):
         return abs(threshold) * NEAR_BAND_BOOTSTRAP_PCT, "provisional 3%-of-threshold estimate"
     return None, None
@@ -247,16 +262,45 @@ def near_threshold_band(cache, token, threshold):
     little history — 3% of zero is meaningless, so no leeway is granted
     rather than fabricating one). Built on get_effective_sigma() so the
     two share one definition of "how much this indicator naturally
-    wobbles" -- the real-sigma case scales it to a tighter band
-    (NEAR_BAND_STDEV_FRACTION of sigma); the bootstrap case is already
-    the right-sized band as-is (no further scaling), matching this
-    function's pre-existing behavior exactly."""
+    wobbles" -- any real-stdev case (full n>=20 OR the partial 3-19-day
+    sample) scales it to a tighter band (NEAR_BAND_STDEV_FRACTION of
+    sigma), since both are genuine measurements just at different
+    confidence; the bootstrap case is already the right-sized band as-is
+    (no further scaling), matching this function's pre-existing behavior
+    exactly."""
     sigma, source = get_effective_sigma(cache, token, threshold)
     if sigma is None:
         return None, None
-    if source.startswith("n="):
+    if source.startswith("n=") or source.startswith("provisional, n="):
         return sigma * NEAR_BAND_STDEV_FRACTION, f"\u00b1{NEAR_BAND_STDEV_FRACTION}\u03c3 ({source})"
     return sigma, "provisional 3%"
+
+
+def consecutive_buy_days(cache, token, direction, threshold):
+    """How many of the most recent daily readings in this token's own
+    rolling history were buy-favorable (crossed the threshold outright, or
+    sat inside its near-threshold leeway band), counting back from today
+    until the first day that wasn't. A second, independent signal shown
+    next to today's status -- doesn't feed the tier system, WEIGHT_MAP, or
+    the weighted verdict at all, just visible context. Uses today's
+    threshold/band against every historical point rather than
+    reconstructing each day's now-lost threshold, the same simplification
+    the rest of this leeway system already makes."""
+    hist_key = f"{token}__history"
+    values = cache.get(hist_key, {}).get("values", [])
+    if not values or direction not in ("low", "high") or threshold is None:
+        return None
+    band, _ = near_threshold_band(cache, token, threshold)
+    count = 0
+    for v in reversed(values):
+        if direction == "low":
+            favorable = v <= threshold or (band is not None and v <= threshold + band)
+        else:
+            favorable = v >= threshold or (band is not None and v >= threshold - band)
+        if not favorable:
+            break
+        count += 1
+    return count
 
 # token -> (endpoint slug [best guess, unverified], direction, threshold)
 BG_METRICS = {
@@ -1471,7 +1515,29 @@ NO_SIGNAL_STATUS = {
 }
 
 
-def build_full_weighted_breakdown(values):
+# Direction/threshold source for the consecutive-buy-days annotation,
+# shown only next to the top 7 by weight. PROD_COST is deliberately
+# excluded: its own rolling history stores the THRESHOLD side (cost/BTC),
+# not the value actually compared against it (spot price) -- no daily
+# spot-price history is cached anywhere, so there's no honest way to
+# reconstruct its past daily status from existing data. Fabricating one
+# from mismatched series would be worse than just not showing a count.
+CONSECUTIVE_DAYS_EXCLUDED = {"PROD_COST"}
+
+
+def _consecutive_days_direction_threshold(token, cache):
+    if token in BG_METRICS:
+        direction, threshold = BG_METRICS[token][1], BG_METRICS[token][2]
+        return direction, threshold
+    if token == "NVT_GC":
+        return "low", -1.6
+    if token == "ACTIVE_ADDR_DEV":
+        threshold, _n = rolling_threshold(cache, "ACTIVE_ADDR_DEV")
+        return "low", threshold
+    return None, None
+
+
+def build_full_weighted_breakdown(values, cache):
     """The single master table: Power Law at rank 1 (veto power, not a
     percentage), then every tracked indicator via get_master_rank_order()
     below it. This is the only place that generates a row of HTML for any
@@ -1481,8 +1547,13 @@ def build_full_weighted_breakdown(values):
     dicts above (TOOLTIP_TEXT, SOURCE_URL, READING_FORMATTERS, NAME_CAVEAT,
     DISPLAY_NAMES, TARGET_LABELS-derived values), not from any hand-written
     HTML row in the template. Returns a ready-to-insert HTML string, since
-    the day-to-day status mix changes every run."""
+    the day-to-day status mix changes every run.
+
+    The top 7 by weight additionally get a small consecutive-buy-days
+    annotation next to their status pill -- an independent, visible second
+    signal (not fed back into scoring or the tier system at all)."""
     rows = []
+    top7 = set(get_master_rank_order()[:7])
 
     # Rank 1 — Power Law, always first, never part of the weight pool.
     rows.append(
@@ -1535,12 +1606,27 @@ def build_full_weighted_breakdown(values):
                 status_text, status_css = label, "st-no"
             elif label and label.startswith("STALE"):
                 status_text, status_css = label, "st-mid"
+            elif token == "NVT_GC" and label and label != "CHECK":
+                # NVT's real computed label (e.g. its own OVERPRICED case,
+                # or any future non-buy st-mid state) should reach the
+                # page as-is instead of being flattened to the generic
+                # placeholder below -- that placeholder is only accurate
+                # when there's genuinely no reading (CHECK/None).
+                status_text, status_css = label, "st-mid"
             else:
                 status_text, status_css = "NO READING TODAY", "st-mid"
         elif token in NO_SIGNAL_STATUS:
             status_text, status_css = NO_SIGNAL_STATUS[token]
         else:
             status_text, status_css = "NOT SCORED", "st-mid"
+
+        days_html = ""
+        if token in top7 and token not in CONSECUTIVE_DAYS_EXCLUDED:
+            days_direction, days_threshold = _consecutive_days_direction_threshold(token, cache)
+            days = consecutive_buy_days(cache, token, days_direction, days_threshold)
+            if days:
+                unit = "day" if days == 1 else "days"
+                days_html = f' <span class="caveat">{days} {unit}</span>'
 
         if is_weighted:
             weight = WEIGHT_MAP[token]
@@ -1551,7 +1637,7 @@ def build_full_weighted_breakdown(values):
                 f'<td class="reading">{reading_val}</td>'
                 f'<td class="reading">{weight_display}</td>'
                 f'<td class="target">{target}</td>'
-                f'<td><span class="status-pill {status_css}">{status_text}</span></td>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span>{days_html}</td>'
                 f'<td class="ind-source">{source_html}</td></tr>'
             )
         else:
@@ -1849,7 +1935,7 @@ def main():
 
         threshold, n_points = rolling_threshold(cache, token)
         if threshold is not None and fresh_val is not None:
-            label, css = status_pill(fresh_val, "low", threshold)
+            label, css = status_pill(fresh_val, "low", threshold, cache=cache, token=token)
             values[f"{token}_STATUS_LABEL"] = label
             values[f"{token}_STATUS_CLASS"] = css
             values[f"{token}_TARGET"] = f"\u2264 {round(threshold, 2)} (live, {PERCENTILE_CUTOFF}th pct. of trailing {n_points}d)"
@@ -2059,15 +2145,20 @@ def main():
     tx_vol_hist = fetch_blockchain_chart("estimated-transaction-volume-usd", days=340)
     nvt_gc = compute_nvt_golden_cross(price_history, tx_vol_hist)
     values["NVT_GC"] = nvt_gc
+    history_append(cache, "NVT_GC", nvt_gc)
+    # OVERPRICED stays a hardcoded top-only case -- not relevant to a
+    # bottom-focused dashboard, so it never goes through status_pill()'s
+    # buy-side leeway machinery. The buy-side determination (formerly a
+    # hardcoded "< -1.6" check) is now routed through status_pill() like
+    # every other indicator, so NVT gets the same STRONG BUY / BUY /
+    # BORDERLINE BUY / NOT YET four-tier system instead of a flat
+    # threshold and a hand-rolled "NEUTRAL" label.
     if nvt_gc is None:
         nvt_label, nvt_css = "CHECK", "st-mid"
     elif nvt_gc > 2.2:
         nvt_label, nvt_css = "OVERPRICED", "st-no"
-    elif nvt_gc < -1.6:
-        nvt_label, nvt_css = "BUY ZONE", "st-buy"
     else:
-        gap = abs(nvt_gc - (-1.6))
-        nvt_label, nvt_css = f"NEUTRAL ({round(gap, 2)} away from buy zone)", "st-mid"
+        nvt_label, nvt_css = status_pill(nvt_gc, "low", -1.6, cache=cache, token="NVT_GC")
     values["NVT_GC_STATUS_LABEL"], values["NVT_GC_STATUS_CLASS"] = nvt_label, nvt_css
     values["NVT_GC_TARGET"] = target_for("NVT_GC")
     print(f"  NVT Golden Cross (z-score): {nvt_gc} -> {nvt_label}")
@@ -2128,7 +2219,7 @@ def main():
         values["STALENESS_BANNER"] = ""
 
     print("Building weighted verdict synthesis...")
-    values["FULL_WEIGHTED_BREAKDOWN_ROWS"] = build_full_weighted_breakdown(values)
+    values["FULL_WEIGHTED_BREAKDOWN_ROWS"] = build_full_weighted_breakdown(values, cache)
     values["WEIGHT_PIE_SVG"] = build_weight_pie_svg(values)
     values["TOTAL_TRACKED_COUNT"] = len(_ALL_TRACKED_TOKENS) + 1  # +1 for Power Law, always rank 1
     verdict = build_verdict(values)
