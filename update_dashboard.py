@@ -1066,6 +1066,93 @@ DISPLAY_NAMES = {
     "DRAWDOWN": "Drawdown Magnitude",
 }
 
+# Short subtitle shown right after an indicator's name, before its tooltip
+# icon — ported verbatim from the old §1/§2 tables. Omitted wherever
+# DISPLAY_NAMES already states the same qualifier (e.g. aSOPR's name
+# already says "(modeled)"; MACD's and Cycle Rhythm's names already carry
+# their own interval/day-count), so nothing gets stated twice.
+NAME_CAVEAT = {
+    "REALIZED_PRICE": "shown, not scored",
+    "PROD_COST": "electricity-only",
+    "DRAWDOWN": "not scored",
+    "MINER_CAP": "Hash Ribbons",
+    "MACD": "12/26/9",
+    "RSI": "14-period",
+    "BOLLINGER": "20-week, 2σ",
+    "CYCLE_RHYTHM": "not scored",
+}
+
+# Hover-tooltip methodology text for every tracked indicator — ported
+# verbatim (byte-for-byte, programmatically extracted rather than
+# retyped) from the old §1/§2 tables, so the merged table loses none of
+# that explanatory content. Single source of truth: the table-building
+# function below is the only place this ever gets read.
+TOOLTIP_TEXT = {
+    "MVRV_Z": 'Market cap vs. realized cap, standardized against its own historical volatility. The most refined member of the "price vs. cost basis" family — highest weight on this board.',
+    "REALIZED_PRICE": 'Average cost basis of every coin. <strong>Not counted in the weighted verdict</strong> — mathematically the un-normalized version of MVRV Z-Score (spot ÷ realized price IS the MVRV ratio), so scoring both would double-count one signal.',
+    "PUELL": 'Daily miner issuance value vs. its 365-day average. Ties valuation to real mining economics — genuinely independent from the on-chain price-ratio cluster above.',
+    "RESERVE_RISK": 'Price relative to long-term holder conviction (accumulated coin-days vs. price). Thinner public track record than MVRV/Puell, hence a discounted weight.',
+    "LTH_SOPR": 'Long-term holders spending at profit (&gt;1) or loss (&lt;1). A behavioral confirmation signal — tends to lag the actual low rather than lead it.',
+    "THERMOCAP": 'Market cap vs. cumulative miner revenue ever paid. No globally-agreed fixed threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older market — see README for the research behind this. Scored at reduced (Tier 3) weight until then.',
+    "NRPL": 'Net Realized P&amp;L in BTC — realized profit minus realized loss; deeply negative means capitulation dominates. No fixed published threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older, smaller network — see README. Scored at reduced (Tier 3) weight until then.',
+    "SUPPLY_LOSS": 'Share of circulating BTC below cost basis (derived: 100 − Supply in Profit). The metric this whole project started from.',
+    "ASOPR_EST": 'SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode\'s own published mechanism, not a raw substitute for the real metric.',
+    "PROD_COST": 'Live hashrate/difficulty × Cambridge CBECI\'s $0.05/kWh assumption + 20 J/TH blended efficiency. Reads lower than "all-in" bank headlines (e.g. JPMorgan\'s ~$78K), which add hardware depreciation — different scope, not a contradiction.',
+    "MAYER": 'Price ÷ 200-day moving average. Simple, blunt, generic across any asset — lowest weight tier for that reason.',
+    "DRAWDOWN": "% below all-time high ($126,296, Oct 2025). <strong>Not counted</strong> — purely descriptive, tells you how far price fell, nothing about whether it's done falling.",
+    "MINER_CAP": "Charles Edwards' full original methodology: 30d/60d hashrate MA cross for capitulation/recovery, confirmed by 10d/20d price MA momentum for the real buy signal — not just the raw hashrate spread.",
+    "NVT_GC": 'Exact CryptoQuant formula: 10d/30d MA spread of Market Cap ÷ Tx Volume, standardized as a z-score against its own 300-day volatility. &gt;2.2 overpriced, &lt;−1.6 bottom zone.',
+    "FNG": 'Composite sentiment score. Genuine contrarian signal, but can sit at extremes for months — good color, weak standalone trigger.',
+    "MACD": 'Trend-following crossover — a bullish histogram flip has historically flagged major reversals, including Dec 2022.',
+    "RSI": 'Classic oversold oscillator — generic across any asset, can stay pinned for months in a strong downtrend.',
+    "BOLLINGER": 'Where price sits in its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal.',
+    "CYCLE_RHYTHM": 'Calendar-only projection. <strong>Not counted</strong> — a date, not a threshold. Already broke once on the last cycle leg (376–381 vs. claimed 364 days).',
+}
+
+# (url_or_None, link_text) for every tracked indicator's Source column.
+# Every URL here is one already verified and shipped in a prior version's
+# §1/§2 tables (v14 independently re-verified six of these against real
+# indexed search results) — none of these are new/invented for this
+# merge, per the same "reuse, don't reinvent" bar as that verification.
+SOURCE_URL = {
+    "MVRV_Z": ("https://charts.bgeometrics.com/mvrv.html", "view"),
+    "REALIZED_PRICE": ("https://charts.bgeometrics.com/realized_price_g.html", "view"),
+    "PUELL": ("https://charts.bgeometrics.com/puell_multiple.html", "view"),
+    "RESERVE_RISK": ("https://charts.bgeometrics.com/reserve_risk.html", "view"),
+    "LTH_SOPR": ("https://charts.bgeometrics.com/lth_sopr.html", "view"),
+    "THERMOCAP": ("https://charts.bitbo.io/thermocap-multiple/", "view"),
+    "NRPL": ("https://charts.bgeometrics.com/nrpl.html", "view"),
+    "SUPPLY_LOSS": ("https://charts.bgeometrics.com/supply_in_profit.html", "view"),
+    "ASOPR_EST": (None, "formula, see README"),
+    "PROD_COST": ("https://ccaf.io/cbnsi/cbeci/methodology", "methodology"),
+    "MAYER": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
+    "DRAWDOWN": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
+    "MINER_CAP": ("https://capriole.com/hash-ribbons-bitcoin-bottoms/", "method"),
+    "NVT_GC": ("https://userguide.cryptoquant.com/cryptoquant-metrics/network/nvt-golden-cross", "method"),
+    "FNG": ("https://alternative.me/crypto/fear-and-greed-index/", "view"),
+    "MACD": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
+    "RSI": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
+    "BOLLINGER": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
+    "CYCLE_RHYTHM": (None, "pure date math"),
+}
+
+# Per-token reading-cell formatters, ported verbatim from the richer
+# display formatting §1/§2 used to apply (dollar/percent signs, two-line
+# state+detail displays) — without this, the merged table would silently
+# regress to a plainer reading than the tables it's replacing. Tokens not
+# listed here show their bare value (str(values.get(token))), matching
+# what §4 already did for the tokens that never had special formatting.
+READING_FORMATTERS = {
+    "REALIZED_PRICE": lambda v: f"${v.get('REALIZED_PRICE', '—')}",
+    "SUPPLY_LOSS": lambda v: f"{v.get('SUPPLY_LOSS', '—')}%",
+    "PROD_COST": lambda v: f"${v.get('PROD_COST', '—')}<br><span class=\"caveat\">({v.get('PROD_COST_PCT', '—')}% vs. spot)</span>",
+    "DRAWDOWN": lambda v: f"{v.get('DRAWDOWN', '—')}%",
+    "MINER_CAP": lambda v: f"{v.get('MINER_CAP_STATE', '—')}<br><span class=\"caveat\">({v.get('MINER_CAP', '—')}% spread)</span>",
+    "FNG": lambda v: f"{v.get('FNG', '—')} ({v.get('FNG_LABEL', '—')})",
+    "MACD": lambda v: f"{v.get('MACD', '—')}<br><span class=\"caveat\">cross: {v.get('MACD_CROSSED', '—')}</span>",
+    "CYCLE_RHYTHM": lambda v: f"{v.get('DAYS_SINCE_TOP', '—')}d since top",
+}
+
 
 # ---------------------------------------------------------------------------
 # Target values — the number each indicator needs to reach to flip to a buy
@@ -1171,12 +1258,16 @@ EXCLUSION_REASONS = {
 
 
 def build_full_weighted_breakdown(values):
-    """One unified, ranked table: Power Law at rank 1 (veto power, not a
-    percentage), then every tracked indicator via get_master_rank_order() below
-    it. Shows each indicator's actual reading, its weight-share of the
-    total pool (or N/A plus a one-line reason for indicators that can
-    never score), its target, and today's status. Returns a ready-to-
-    insert HTML string, since the day-to-day status mix changes every run."""
+    """The single master table: Power Law at rank 1 (veto power, not a
+    percentage), then every tracked indicator via get_master_rank_order()
+    below it. This is the only place that generates a row of HTML for any
+    indicator -- name, tooltip, anchor icon, reading, weight-share (or N/A
+    plus a one-line reason for indicators that can never score), target,
+    today's status, and a hyperlinked source all come from the Python
+    dicts above (TOOLTIP_TEXT, SOURCE_URL, READING_FORMATTERS, NAME_CAVEAT,
+    DISPLAY_NAMES, TARGET_LABELS-derived values), not from any hand-written
+    HTML row in the template. Returns a ready-to-insert HTML string, since
+    the day-to-day status mix changes every run."""
     rows = []
 
     # Rank 1 — Power Law, always first, never part of the weight pool.
@@ -1186,26 +1277,35 @@ def build_full_weighted_breakdown(values):
         '<td class="reading">\u2014</td>'
         '<td class="reading">VETO</td>'
         '<td class="target">Lower band touch (manual)</td>'
-        '<td><span class="status-pill" style="background:rgba(96,165,250,.15); color:var(--blue);">MASTER SIGNAL</span></td></tr>'
+        '<td><span class="status-pill" style="background:rgba(96,165,250,.15); color:var(--blue);">MASTER SIGNAL</span></td>'
+        '<td class="ind-source">manual</td></tr>'
     )
-
-    # Most tokens' raw reading lives under values[token] directly; a few
-    # need a different key for a genuinely meaningful display.
-    READING_OVERRIDE = {
-        "MINER_CAP": lambda v: v.get("MINER_CAP_STATE", "\u2014"),
-        "CYCLE_RHYTHM": lambda v: f"{v.get('DAYS_SINCE_TOP', '\u2014')}d since top",
-    }
 
     for i, token in enumerate(get_master_rank_order(), start=2):
         name = DISPLAY_NAMES.get(token, token)
         target = values.get(f"{token}_TARGET", "—")
-        if token in READING_OVERRIDE:
-            reading_val = READING_OVERRIDE[token](values)
+        formatter = READING_FORMATTERS.get(token)
+        if formatter:
+            reading_val = formatter(values)
         else:
             reading_val = values.get(token)
             reading_val = "\u2014" if reading_val is None else reading_val
 
-        if token in WEIGHT_MAP:
+        caveat = NAME_CAVEAT.get(token, "")
+        caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
+        tooltip_text = TOOLTIP_TEXT.get(token, "")
+        tooltip_html = (
+            f' <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span>'
+            f'<span class="tip-content">{tooltip_text}</span></span>'
+        ) if tooltip_text else ""
+        is_weighted = token in WEIGHT_MAP
+        anchor_html = ' <span class="anchor-icon">⚓</span>' if is_weighted else ""
+        name_cell = f"{name}{caveat_html}{tooltip_html}{anchor_html}"
+
+        src_url, src_label = SOURCE_URL.get(token, (None, "—"))
+        source_html = f'<a href="{src_url}" target="_blank">{src_label}</a>' if src_url else src_label
+
+        if is_weighted:
             weight = WEIGHT_MAP[token]
             pct_of_total = round((weight / sum(WEIGHT_MAP.values())) * 100, 1)
             weight_display = f"{pct_of_total}%"
@@ -1224,21 +1324,23 @@ def build_full_weighted_breakdown(values):
             else:
                 status_text, status_css = "NO READING TODAY", "st-mid"
             rows.append(
-                f'<tr><td class="rank-num">{i}</td><td class="ind-name">{name}</td>'
+                f'<tr><td class="rank-num">{i}</td><td class="ind-name">{name_cell}</td>'
                 f'<td class="reading">{reading_val}</td>'
                 f'<td class="reading">{weight_display}</td>'
                 f'<td class="target">{target}</td>'
-                f'<td><span class="status-pill {status_css}">{status_text}</span></td></tr>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span></td>'
+                f'<td class="ind-source">{source_html}</td></tr>'
             )
         else:
             reason = EXCLUSION_REASONS.get(token, "Not currently scored")
             rows.append(
                 f'<tr class="rank-na"><td class="rank-num">{i}</td>'
-                f'<td class="ind-name">{name}<div class="na-reason">{reason}</div></td>'
+                f'<td class="ind-name">{name_cell}<div class="na-reason">{reason}</div></td>'
                 f'<td class="reading">{reading_val}</td>'
                 f'<td class="reading">N/A</td>'
                 f'<td class="target">{target}</td>'
-                f'<td><span class="status-pill st-mid">NOT SCORED</span></td></tr>'
+                f'<td><span class="status-pill st-mid">NOT SCORED</span></td>'
+                f'<td class="ind-source">{source_html}</td></tr>'
             )
     return "\n".join(rows)
 
@@ -1281,12 +1383,12 @@ def build_signal_summary_html(values):
       <div class="summary-row">
         <div class="summary-cell">
           <div class="summary-frac">{core_buy}/{core_total}</div>
-          <div class="summary-label">Core (§1) signaling bottom</div>
+          <div class="summary-label">Core indicators signaling bottom</div>
           <div class="summary-pct">{core_pct}%</div>
         </div>
         <div class="summary-cell">
           <div class="summary-frac">{self_buy}/{self_total}</div>
-          <div class="summary-label">Self-computed (§2) signaling bottom</div>
+          <div class="summary-label">Self-computed indicators signaling bottom</div>
           <div class="summary-pct">{self_pct}%</div>
         </div>
         <div class="summary-cell">
@@ -1678,12 +1780,9 @@ def main():
     verdict = build_verdict(values)
     values.update(verdict)
     # Anchor icon (⚓) next to every indicator currently carrying real
-    # weight in the verdict — a quick visual "this one counts" marker,
-    # computed after WEIGHT_MAP is finalized (Thermocap/NRPL may have
-    # just conditionally joined it above).
-    for _t in CORE_TOKENS + SELF_COMPUTED_TOKENS:
-        values[f"{_t}_ANCHOR"] = "\u2693" if _t in WEIGHT_MAP else ""
-
+    # weight is computed per-row directly inside build_full_weighted_
+    # breakdown() above, from the same WEIGHT_MAP membership check the
+    # row's weight/status logic already uses.
     values["SIGNAL_SUMMARY_BOX"] = build_signal_summary_html(values)
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")
 
