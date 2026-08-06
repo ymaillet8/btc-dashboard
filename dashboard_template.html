@@ -6,7 +6,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>₿TC Bottom Watch — A Weighted Cycle-Bottom Signal Board</title>
+<title>₿TC Cycle Watch — Weighted Cycle-Bottom &amp; Cycle-Top Signal Boards</title>
 <style>
   :root{
     --bg:#0a0c10; --panel:#12151b; --panel-2:#161a21; --border:#242a33;
@@ -194,8 +194,8 @@
 
   <div class="titleblock">
     <div class="eyebrow">Automated · Rebuilt Daily · Free-Data Only</div>
-    <h1>₿TC Bottom Watch</h1>
-    <p class="abstract">A weighted synthesis of the most statistically defensible Bitcoin cycle-bottom indicators — <strong>ranked and scored by significance</strong>, fetched and computed automatically each day from free public data, and weighed underneath the one signal that actually decides anything.</p>
+    <h1>₿TC Cycle Watch</h1>
+    <p class="abstract">A weighted synthesis of the most statistically defensible Bitcoin cycle indicators — <strong>ranked and scored by significance</strong>, fetched and computed automatically each day from free public data. Two genuinely separate weight pools, one per market phase: a Cycle Bottom board weighed underneath the one signal that actually decides anything, and a Cycle Top board tracking the opposite extreme independently.</p>
     <div class="updated-line">Last refreshed: {{LAST_UPDATED}}</div>
   </div>
 
@@ -221,9 +221,9 @@
 
   <div class="section">
     <div class="section-head">
-      <div class="section-num">§1 · WEIGHTED SYNTHESIS</div>
-      <div class="section-title">Full Rank &amp; Weight</div>
-      <div class="section-sub">Every tracked indicator, ranked by actual current weight, heaviest first — the primary content of this page. Power Law holds veto power and sits outside the weight pool by design. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight.</div>
+      <div class="section-num">§1 · WEIGHTED SYNTHESIS — BOTTOM</div>
+      <div class="section-title">Cycle Bottom Rank &amp; Weight</div>
+      <div class="section-sub">Every tracked bottom-side indicator, ranked by actual current weight, heaviest first — the primary content of this page. Power Law holds veto power and sits outside the weight pool by design. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight.</div>
     </div>
     <div class="pie-wrap">
       <div class="pie-caption">Each slice is an indicator's share of the weighted verdict — colored in if it's currently a buy signal, grey if not.</div>
@@ -238,9 +238,40 @@
     <div class="table-source-line">{{TOTAL_TRACKED_COUNT}} indicators tracked in total · weight % is share of the scoreable pool only, recalculated fresh each run</div>
   </div>
 
+  {{SIGNAL_SUMMARY_BOX_TOP}}
+
   <div class="section">
     <div class="section-head">
-      <div class="section-num">§2 · LIVE — POLYMARKET GAMMA API</div>
+      <div class="section-num">§2 · WEIGHTED SYNTHESIS — TOP</div>
+      <div class="section-title">Cycle Top Rank &amp; Weight</div>
+      <div class="section-sub">Every tracked top-side indicator, ranked by actual current weight, heaviest first — a genuinely separate weight pool from the Cycle Bottom table above, sharing machinery (leeway/sigma system, rolling-percentile thresholds) but not a shared pool, so each table can independently report its own phase. No Power Law row here — Power Law has no published top-side analog. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight. MVRV Z-Score, Puell Multiple, and Thermocap Multiple join the pool once their own rolling-percentile threshold has enough history (90+ days); Pi Cycle Top is deliberately display-only, not yet weighted.</div>
+    </div>
+    <div class="pie-wrap">
+      <div class="pie-caption">Each slice is an indicator's share of the top-side weighted verdict — colored in if it's currently a top signal, grey if not.</div>
+      {{WEIGHT_PIE_SVG_TOP}}
+    </div>
+    <table>
+      <thead><tr><th style="width:5%">#</th><th style="width:23%">Indicator</th><th style="width:12%">Reading</th><th style="width:9%">Weight</th><th style="width:19%">Target</th><th style="width:17%">Status Today</th><th style="width:15%">Source</th></tr></thead>
+      <tbody>
+        {{FULL_WEIGHTED_BREAKDOWN_ROWS_TOP}}
+      </tbody>
+    </table>
+    <div class="table-source-line">{{TOTAL_TRACKED_COUNT_TOP}} indicators tracked in total · weight % is share of the scoreable pool only, recalculated fresh each run</div>
+    <div class="discussion" style="margin-top:16px;">
+      <strong>Table 3 verdict:</strong> {{VERDICT_COUNT_TOP}} of today's scoreable top-side indicators are top-favorable ({{VERDICT_PCT_TOP}}% of scored weight) — {{VERDICT_HEADLINE_TOP}}
+      <br><br>
+      {{VERDICT_BODY_TOP}}
+      <br><br>
+      Flashing top-favorable this run: {{VERDICT_TOP_LIST_TOP}}.
+      <div class="fine-print">
+        <strong>This is a mechanical tally, not financial advice or a price prediction.</strong> Same caveats as the Cycle Bottom table above.
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">§3 · LIVE — POLYMARKET GAMMA API</div>
       <div class="section-title">Prediction Market</div>
       <div class="section-sub">Crowd probability, not a forecast — deliberately not scored in §1. Hover for the caveat.</div>
     </div>
@@ -291,11 +322,11 @@
 
   <div class="section">
     <div class="section-head">
-      <div class="section-num">§3 · DISCUSSION</div>
+      <div class="section-num">§4 · DISCUSSION</div>
       <div class="section-title">What Today's Reading Means</div>
     </div>
     <div class="discussion">
-      <strong>Where things stand:</strong> {{VERDICT_COUNT}} of today's scoreable indicators are buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong>Power Law has not confirmed</strong> — nothing above substitutes for that.
+      <strong>Where things stand (Cycle Bottom table):</strong> {{VERDICT_COUNT}} of today's scoreable indicators are buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong>Power Law has not confirmed</strong> — nothing above substitutes for that. (Cycle Top table's own verdict is discussed inline in §2 above, since it isn't yet weighted enough to warrant a second full discussion section.)
       <br><br>
       {{VERDICT_BODY}}
       <br><br>

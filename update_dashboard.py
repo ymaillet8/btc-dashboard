@@ -174,16 +174,21 @@ def compute_percentile(values, pct):
     return s[f] + (s[c] - s[f]) * (k - f)
 
 
-def rolling_threshold(cache, key):
+def rolling_threshold(cache, key, percentile=PERCENTILE_CUTOFF):
     """Returns (threshold, n_points) if enough history has accumulated to
     trust a computed percentile, else (None, n_points) so callers can show
-    honest accumulation progress even before the gate is met."""
+    honest accumulation progress even before the gate is met. `percentile`
+    defaults to PERCENTILE_CUTOFF (10 — bottom-favorable) for every
+    existing Table 1 caller, unchanged; Table 3's top-side callers
+    (MVRV Z-Score, Puell, Thermocap) pass percentile=100-PERCENTILE_CUTOFF
+    to get the top decile of the SAME trailing history instead — same
+    function, same cache, just which tail of the distribution counts."""
     hist_key = f"{key}__history"
     values = cache.get(hist_key, {}).get("values", [])
     n = len(values)
     if n < MIN_HISTORY_DAYS:
         return None, n
-    return compute_percentile(values, PERCENTILE_CUTOFF), n
+    return compute_percentile(values, percentile), n
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +442,48 @@ def fetch_bg_latest(slug):
     except Exception as e:
         print(f"  ! {slug}: failed — {e}")
     return None
+
+
+# ---------------------------------------------------------------------------
+# 1a-top. Pi Cycle Top — genuinely new for the Cycle Top table (Table 3).
+# The "pi-cycle" slug was removed from BG_METRICS entirely in v18 after
+# confirming (via BGeometrics' own chart page) it's the TOP-only variant
+# (111-day SMA vs. 350-day SMA x2), not the Bottom variant this dashboard
+# needed at the time -- useless there, but exactly the real, standard,
+# published Pi Cycle TOP formula needed here. Re-confirmed live before
+# writing this: the endpoint still works, unauthenticated, same free tier
+# (https://coincodex.com/bitcoin-pi-cycle-top-indicator/ for the public
+# formula). Returns three raw fields per day (piSma111, piSma350x2,
+# piSignal) -- richer than the single-value shape fetch_bg_latest() expects,
+# so this needs its own small fetch rather than reusing that generic
+# parser. The crossed/not-crossed state is computed here directly from the
+# two raw SMA values rather than trusted from BGeometrics' own piSignal
+# field: piSignal was 0 for the entire available ~4-year window when this
+# was researched (no real crossover happened in that window -- the last
+# one was April 2021), so its exact semantics couldn't be independently
+# verified against a known historical crossover before shipping.
+# ---------------------------------------------------------------------------
+def fetch_pi_cycle_latest():
+    """Latest day's (piSma111, piSma350x2) from BGeometrics' pi-cycle feed,
+    or (None, None) on any fetch/parse failure."""
+    url = f"{BG_BASE}/pi-cycle"
+    try:
+        data = _get_json(url, headers={
+            "User-Agent": "btc-dashboard-bot/1.0",
+            "Authorization": f"Bearer {BG_KEY}",
+        })
+        if isinstance(data, list) and data:
+            last = data[-1]
+            if isinstance(last, dict):
+                sma111 = last.get("piSma111")
+                sma350x2 = last.get("piSma350x2")
+                if sma111 is not None and sma350x2 is not None:
+                    return float(sma111), float(sma350x2)
+    except urllib.error.HTTPError as e:
+        print(f"  ! pi-cycle: HTTP {e.code} — {e.reason}")
+    except Exception as e:
+        print(f"  ! pi-cycle: failed — {e}")
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -1298,6 +1345,109 @@ WEIGHT_MAP = {
     "MACD": 1.0,
 }
 
+# ---------------------------------------------------------------------------
+# WEIGHT_MAP_TOP — Table 3's own, genuinely separate weight pool for the
+# Cycle TOP table. Deliberately NOT merged with WEIGHT_MAP: Table 1 and
+# Table 3 must each be able to independently report "my phase is active"
+# (e.g. Table 1 at 40% bottom-confluence while Table 3 sits at 10%
+# top-confluence is a perfectly normal, meaningful mid-cycle reading —
+# a shared pool would make that unrepresentable). For indicators whose
+# RAW VALUE is shared with Table 1 (MVRV Z-Score, Puell, Reserve Risk,
+# Thermocap, RSI, Bollinger %B, Mayer, Fear & Greed, NVT Golden Cross),
+# the underlying fetch/compute happens exactly once in main() and the SAME
+# rolling-history cache key (e.g. "MVRV_Z__history") is reused for both
+# tables' sigma/leeway calculations -- only the comparison direction and
+# threshold differ. Starts EMPTY: Phase 2 builds every indicator as
+# real-but-unweighted first (DISPLAYABLE_BUT_UNWEIGHTED_TOP /
+# NO_SIGNAL_STATUS_TOP below), exactly the discipline the Realized Price/
+# Drawdown lesson established on Table 1 -- a real status has to exist and
+# be tested before it goes anywhere near a weight.
+#
+# PHASE 3 — tier-confidence weight assignment. Same three-tier framework
+# already established for Table 1 (Tier 1 mathematically-derived, Tier 2
+# established-but-less-certain, Tier 3 novel/unproven), applied fresh here
+# rather than assuming a token's bottom-table tier carries over:
+#
+#   MVRV_Z, PUELL (1.5 each once bootstrapped): NOT weighted the same as
+#   Thermocap/NRPL's underlying metric quality would suggest on its own --
+#   deliberately matched to Thermocap/NRPL's own Tier-3 weight (1.5)
+#   instead. Reasoning (revised after review): the percentile mechanism has
+#   ZERO validating data in either direction for a top-side call, since no
+#   full cycle top exists inside the available ~4-year BGeometrics window --
+#   that's a stronger case for starting conservative than a thin-but-real
+#   evidence base (like MACD's evidence-based discount) would be. There's
+#   no principled reason a top-side percentile mechanism deserves more
+#   initial trust than the bottom-side one did before ITS OWN track record
+#   existed (Thermocap/NRPL started at 1.5, not higher). NOT static entries
+#   below -- like Thermocap/NRPL on Table 1, these join WEIGHT_MAP_TOP
+#   conditionally at runtime in main(), only once their percentile
+#   threshold actually has enough history (n>=90) to be real. A static
+#   entry here would let them count toward the weight pool and percentage
+#   share while still showing "BUILDING HISTORY" with no real signal --
+#   exactly the bug class Thermocap/NRPL's own conditional-join pattern
+#   exists to prevent.
+#
+#   RESERVE_RISK (1.5): a real, published top threshold exists (>0.02), but
+#   single-sourced at Medium confidence per Phase 1 -- discounted well below
+#   its Tier-1 bottom-table weight (2.5) for that citation gap specifically.
+#
+#   THERMOCAP (1.0): weakest Phase 1 citation of the set (32x-64x range
+#   across just the two 2021 tops alone -- no defensible single number even
+#   as a reference point, unlike NRPL/Thermocap's bottom-table ~4x). Same
+#   percentile mechanism as MVRV_Z/Puell above (also a conditional runtime
+#   join, not a static entry, for the same bootstrap-honesty reason), but
+#   the underlying concept's top-side citation is markedly weaker -- floor
+#   tier once it does join, one notch below MVRV_Z/Puell's 1.5.
+#
+#   NVT_GC (2.0): exact same published CryptoQuant formula as Table 1's
+#   NVT_GC (also weight 2.0 there). Originally discounted to 1.5 to price
+#   around a real gap -- the >2.2 boolean wasn't routed through
+#   status_pill(), so it had none of the leeway/sigma/strong-signal tiering
+#   every other Table 3 indicator gets. Checked whether that gap could be
+#   fixed directly instead of priced around: it could, straightforwardly --
+#   status_pill(nvt_gc_val, "high", 2.2, cache=cache, token="NVT_GC") uses
+#   the exact same shared "NVT_GC__history" cache/token as every other
+#   Table 3 indicator, no new machinery needed. (This is NOT the same as
+#   Table 1's own hardcoded OVERPRICED branch, which is deliberately kept
+#   OUT of status_pill() for a different reason -- that call's leeway is
+#   calibrated for Table 1's buy-side -1.6 case, and running an overpriced
+#   reading through it would attach buy-favorable-flavored "BORDERLINE BUY"
+#   language to a bottom-focused table's high reading. Table 3's >2.2,
+#   direction="high" IS the actual comparison this table cares about, so
+#   routing it through status_pill() here is correct, not a repeat of that
+#   mistake.) With the actual gap resolved rather than priced around, full
+#   weight (2.0) is now justified on the same basis as Table 1's NVT_GC:
+#   same formula, same data, same leeway machinery, same confidence.
+#
+#   RSI, BOLLINGER, MAYER (1.0 each): same "generic, mutually-correlated,
+#   all derived from the same underlying price series" reasoning Table 1
+#   already applies to this exact trio at its own floor tier (weight 1) --
+#   applied symmetrically here despite Mayer's individually strong Trace-
+#   Mayer citation, for consistency with that established precedent.
+#
+#   FNG (1.0): matches Table 1's own "genuine contrarian signal, but weak
+#   standalone trigger" floor-tier treatment of Fear & Greed.
+#
+#   PI_CYCLE_TOP: NOT included -- stays fully display-only. Per Phase 1,
+#   BGeometrics' own piSignal field could not be independently verified
+#   against a known historical crossover (zero crossovers occurred in the
+#   ~4-year available window), this dashboard computes the crossed/not-
+#   crossed state itself rather than trusting that field, and the metric
+#   has zero track record in this specific implementation (previously
+#   removed from the bottom table entirely). Per your own instruction --
+#   "Pi Cycle Top... start at Tier 3 or display-only" -- this is the more
+#   conservative of those two options, chosen deliberately given the
+#   unverified-field and zero-track-record combination.
+# ---------------------------------------------------------------------------
+WEIGHT_MAP_TOP = {
+    "RESERVE_RISK": 1.5, "NVT_GC": 2.0,
+    "RSI": 1.0, "BOLLINGER": 1.0, "MAYER": 1.0, "FNG": 1.0,
+    # MVRV_Z, PUELL, THERMOCAP deliberately absent here -- see the comment
+    # block above. They join at runtime in main() only once their rolling-
+    # percentile threshold has real history (n>=90), at weight 1.5, 1.5,
+    # and 1.0 respectively.
+}
+
 DISPLAY_NAMES = {
     "MVRV_Z": "MVRV Z-Score", "REALIZED_PRICE": "Price vs. Realized Price",
     "PUELL": "Puell Multiple", "RESERVE_RISK": "Reserve Risk",
@@ -1310,6 +1460,7 @@ DISPLAY_NAMES = {
     "BOLLINGER": "Bollinger %B", "CYCLE_RHYTHM": "1064/364-Day Cycle Rhythm",
     "DRAWDOWN": "Drawdown Magnitude",
     "ACTIVE_ADDR_DEV": "Active Addresses Power-Law Deviation",
+    "PI_CYCLE_TOP": "Pi Cycle Top",
 }
 
 # Short subtitle shown right after an indicator's name, before its tooltip
@@ -1356,6 +1507,26 @@ TOOLTIP_TEXT = {
     "ACTIVE_ADDR_DEV": 'Santostasi\'s own model states Bitcoin\'s price, hash rate, and active addresses are "all power laws of each other and of time" — this fits active addresses to its own power-law trend (OLS regression of log(addresses) vs. log(days since genesis), R&sup2; ≈ 0.83 on the full genesis-to-now fit) and measures how far today sits below that trend. Sourced from BGeometrics\' own chart data file, not their versioned API — an unofficial source, flagged as such deliberately. No fixed published threshold exists, so like Thermocap/NRPL this computes its own: the bottom 10th percentile of its own trailing daily history. Scored at reduced (Tier 3) weight — a genuinely novel construction with no track record against past cycle bottoms yet.',
 }
 
+# Table 3 (Cycle Top) tooltip text -- a separate dict, not reused entries in
+# TOOLTIP_TEXT above, because several tokens are shared between both tables
+# by raw value (MVRV Z-Score, Puell, Reserve Risk, Thermocap, RSI, Bollinger
+# %B, Mayer, Fear & Greed, NVT Golden Cross) but need TOP-framed methodology
+# text, not the bottom-framed text already shown on Table 1 for the same
+# token. Research + sourcing for every threshold referenced here is in the
+# Phase 1 research (see conversation/commit message), not re-derived here.
+TOOLTIP_TEXT_TOP = {
+    "PI_CYCLE_TOP": 'The real, published Pi Cycle TOP indicator (Philip Swift): 111-day SMA crossing above 2x the 350-day SMA has historically flagged Bitcoin cycle tops within days, across three separate cycles (2013, 2017, 2021). A crossover event, not a continuous magnitude -- shown as a real CROSSED/NOT CROSSED state with % distance as context, not a leeway band.',
+    "MVRV_Z": 'Same market-cap-vs-realized-cap ratio as Table 1, standardized against its own volatility -- but its peak value has declined every cycle (9.4 in Dec 2017, 7.3 in Apr 2021, only 6.4 in Nov 2021\'s final top), so a single fixed top threshold would risk quietly becoming uncrossable. Uses the same rolling-percentile system as Thermocap/NRPL instead: the top 10th percentile of its own trailing history, self-adjusting as the trend continues.',
+    "PUELL": 'Same miner-issuance ratio as Table 1 -- but its historically-cited top threshold has also declined every cycle (>8 in 2013, >5 in 2017, ~4 more recently). Same rolling-percentile treatment as MVRV Z-Score above, for the same reason.',
+    "RESERVE_RISK": 'Same long-term-holder-conviction ratio as Table 1. A real published top-side ("sell zone") threshold exists at >0.02, corroborated by the metric\'s own creator\'s framework (Hans Hauge, via Bitcoin Magazine/Glassnode) for the underlying concept, though the specific 0.02 number itself is single-sourced (Medium confidence, flagged as such) -- historically associated with the 2013, 2017, and early-2021 peaks.',
+    "THERMOCAP": 'Same market-cap-vs-cumulative-miner-revenue ratio as Table 1. No credible single fixed top threshold exists -- researched values ranged 32x-64x across just the two 2021 tops alone (2x variance within the same cycle), too wide to cite as one number. Same rolling-percentile system as the bottom table\'s own Thermocap treatment.',
+    "RSI": 'Same weekly RSI as Table 1 (14-period). Overbought is researched specifically for the WEEKLY timeframe, not the generic daily-chart 70: weekly RSI above 80 triggered near the 2017, 2021, and early-2025 tops.',
+    "BOLLINGER": 'Same %B (20-week, 2σ) as Table 1. 0.8 is the independently-confirmed standard overbought convention (StockCharts ChartSchool), not just an assumed mirror of the bottom table\'s 0.2.',
+    "MAYER": 'Same price ÷ 200-day MA ratio as Table 1. >2.4 is Trace Mayer\'s own historically-backtested overheated threshold (the metric\'s creator) -- occurring in under 5% of trading days, marking the 2013/2017/2021 tops.',
+    "FNG": 'Same composite sentiment score as Table 1. ≥75 is alternative.me\'s own published "Extreme Greed" band boundary.',
+    "NVT_GC": 'Same exact CryptoQuant formula as Table 1, compared against the &gt;2.2 "overpriced" threshold instead of Table 1\'s &lt;−1.6. Fully routed through the same leeway/sigma system as every other Table 3 indicator (STRONG TOP SIGNAL / TOP-FAVORABLE / APPROACHING TOP / NORMAL) -- unlike Table 1\'s own hardcoded OVERPRICED branch, which is deliberately kept out of that system since its leeway is calibrated for Table 1\'s buy-side reading instead.',
+}
+
 # (url_or_None, link_text) for every tracked indicator's Source column.
 # Every URL here is one already verified and shipped in a prior version's
 # §1/§2 tables (v14 independently re-verified six of these against real
@@ -1382,6 +1553,7 @@ SOURCE_URL = {
     "BOLLINGER": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
     "CYCLE_RHYTHM": (None, "pure date math"),
     "ACTIVE_ADDR_DEV": ("https://charts.bgeometrics.com/address_active_dark.html", "view"),
+    "PI_CYCLE_TOP": ("https://coincodex.com/bitcoin-pi-cycle-top-indicator/", "method"),
 }
 
 # Per-token reading-cell formatters, ported verbatim from the richer
@@ -1400,6 +1572,7 @@ READING_FORMATTERS = {
     "MACD": lambda v: f"{v.get('MACD', '—')}<br><span class=\"caveat\">cross: {v.get('MACD_CROSSED', '—')}</span>",
     "CYCLE_RHYTHM": lambda v: f"{v.get('DAYS_SINCE_TOP', '—')}d since top",
     "ACTIVE_ADDR_DEV": lambda v: f"{v.get('ACTIVE_ADDR_DEV', '—')}%",
+    "PI_CYCLE_TOP": lambda v: f"{v.get('PI_CYCLE_TOP_STATE', '—')}<br><span class=\"caveat\">({v.get('PI_CYCLE_TOP', '—')}% away)</span>",
 }
 
 
@@ -1460,6 +1633,26 @@ def target_for(token):
     return TARGET_LABELS.get(token, "\u2014")
 
 
+# Table 3 (Cycle Top) target labels. MVRV Z-Score, Puell Multiple, and
+# Thermocap Multiple are deliberately NOT here -- per Phase 1's decision,
+# all three use the live rolling-percentile system (same as Thermocap/NRPL
+# on Table 1), so their target string is dynamic and set directly in
+# main(), not a static entry here.
+TARGET_LABELS_TOP = {
+    "RESERVE_RISK":  "\u2265 0.02 (sell zone \u2014 single-sourced, Medium confidence)",
+    "RSI":           "\u2265 80 (overbought, weekly timeframe)",
+    "BOLLINGER":     "\u2265 0.8 (near upper band)",
+    "MAYER":         "\u2265 2.4 (Trace Mayer's own backtested overheated threshold)",
+    "FNG":           "\u2265 75 (Extreme Greed, alternative.me's own band)",
+    "NVT_GC":        "> 2.2 (z-score, OVERPRICED)",
+    "PI_CYCLE_TOP":  "111-day SMA crosses above 2x 350-day SMA",
+}
+
+
+def target_for_top(token):
+    return TARGET_LABELS_TOP.get(token, "\u2014")
+
+
 # Full rank order, matching the original ranked analysis from early in this
 # project (Power Law first, everything else in the same priority order
 # established then) — this is the single reference used to build the rank
@@ -1496,6 +1689,36 @@ def get_master_rank_order():
     scored.sort(key=lambda t: (-WEIGHT_MAP[t], tiebreak[t]))
     return scored + unscored
 
+
+# Table 3 (Cycle Top) pool of tracked tokens -- fallback/tiebreak reference
+# only, same discipline as _ALL_TRACKED_TOKENS above: actual rank is always
+# derived from real WEIGHT_MAP_TOP weight, never hand-maintained. Several
+# token names here are identical to Table 1's (MVRV_Z, PUELL, RESERVE_RISK,
+# THERMOCAP, RSI, BOLLINGER, MAYER, FNG, NVT_GC) -- that's intentional and
+# safe: they share the same rolling-history cache key for sigma/leeway, but
+# every RESULT (status label/class/target) this table reads is stored under
+# its own "_TOP"-suffixed values key, so nothing collides with Table 1's
+# own stored results for the same token.
+_ALL_TRACKED_TOKENS_TOP = [
+    "PI_CYCLE_TOP", "MVRV_Z", "PUELL", "THERMOCAP", "RESERVE_RISK",
+    "RSI", "BOLLINGER", "MAYER", "FNG", "NVT_GC",
+]
+
+
+def get_master_rank_order_top():
+    """Table 3's own rank-order function -- structurally identical to
+    get_master_rank_order() above (same sort-by-real-weight-first logic,
+    same never-hand-written-order discipline), just reading WEIGHT_MAP_TOP
+    and _ALL_TRACKED_TOKENS_TOP instead. A hand-written order already cost
+    Table 1 a dedicated bug fix once; this is built correctly from day one
+    rather than copy-pasting that mistake into a second table."""
+    tiebreak = {t: i for i, t in enumerate(_ALL_TRACKED_TOKENS_TOP)}
+    scored = [t for t in _ALL_TRACKED_TOKENS_TOP if t in WEIGHT_MAP_TOP]
+    unscored = [t for t in _ALL_TRACKED_TOKENS_TOP if t not in WEIGHT_MAP_TOP]
+    scored.sort(key=lambda t: (-WEIGHT_MAP_TOP[t], tiebreak[t]))
+    return scored + unscored
+
+
 # Short, one-line reasons for every indicator that can never contribute a
 # scored vote — shown as a bullet under its row instead of a percentage.
 EXCLUSION_REASONS = {
@@ -1522,6 +1745,33 @@ NO_SIGNAL_STATUS = {
     "NRPL": ("BUILDING HISTORY", "st-mid"),
     "ACTIVE_ADDR_DEV": ("BUILDING HISTORY", "st-mid"),
     "CYCLE_RHYTHM": ("NOT A THRESHOLD", "st-mid"),
+}
+
+# Table 3 (Cycle Top) equivalents. Phase 2 -- display-only, no weight yet --
+# so EVERY tracked token here shows its real, currently-computed status
+# regardless of WEIGHT_MAP_TOP membership (which stays empty through this
+# phase); main() is responsible for storing either a genuine status_pill()
+# result or the literal "BUILDING HISTORY" state directly under each
+# token's "_TOP_STATUS_LABEL"/"_TOP_STATUS_CLASS" keys, so nothing here
+# needs a WEIGHT_MAP_TOP-membership-gated fallback the way Table 1's
+# Thermocap/NRPL do.
+DISPLAYABLE_BUT_UNWEIGHTED_TOP = {
+    "PI_CYCLE_TOP", "MVRV_Z", "PUELL", "RESERVE_RISK", "THERMOCAP",
+    "RSI", "BOLLINGER", "MAYER", "FNG", "NVT_GC",
+}
+
+# Only actually shown for tokens NOT currently in WEIGHT_MAP_TOP: PI_CYCLE_
+# TOP (never weighted, see WEIGHT_MAP_TOP's own comment) and MVRV_Z/PUELL/
+# THERMOCAP while their rolling-percentile bootstrap (n>=90) is still in
+# progress -- once real, main() adds them to WEIGHT_MAP_TOP at runtime and
+# these entries stop applying to them. The other six Table 3 tokens are
+# static WEIGHT_MAP_TOP entries from the moment the process starts, so
+# their reasons here are dead code kept only for completeness/safety.
+EXCLUSION_REASONS_TOP = {
+    "PI_CYCLE_TOP": "Crossover event with an unverified upstream signal field and zero track record in this implementation — display-only by deliberate choice, not a bootstrap-in-progress case",
+    "MVRV_Z": "Rolling percentile threshold (own peak value has declined every cycle — see Phase 1 research) — joins WEIGHT_MAP_TOP at weight 1.5 once n>=90",
+    "PUELL": "Rolling percentile threshold (same declining-per-cycle pattern as MVRV Z-Score) — joins WEIGHT_MAP_TOP at weight 1.5 once n>=90",
+    "THERMOCAP": "Rolling percentile threshold (no credible single fixed top number — see Phase 1 research) — joins WEIGHT_MAP_TOP at weight 1.0 once n>=90",
 }
 
 
@@ -1664,6 +1914,106 @@ def build_full_weighted_breakdown(values, cache):
     return "\n".join(rows)
 
 
+# Table 3 (Cycle Top) status-css -> display-text mapping. Deliberately NOT
+# reusing build_full_weighted_breakdown()'s own st-buy/st-strong-buy/st-near
+# -> "BUY-FAVORABLE"/"STRONG BUY"/"BORDERLINE BUY" text: status_pill()'s
+# underlying leeway/sigma/tier LOGIC is direction-agnostic and fully reused
+# (same function, same css classes, same colors), but "BUY" wording on a
+# cycle-TOP table describing an overheated/sell-favorable reading would be
+# actively backwards. Only the label TEXT differs here; st-no already comes
+# back from status_pill() as "NORMAL{distance}" for direction="high", which
+# reads correctly on a top table with no override needed.
+_TOP_STATUS_TEXT = {
+    "st-strong-buy": "STRONG TOP SIGNAL",
+    "st-buy": "TOP-FAVORABLE",
+    "st-near": "APPROACHING TOP",
+}
+
+
+def build_full_weighted_breakdown_top(values, cache):
+    """Table 3's own master table -- structurally identical to
+    build_full_weighted_breakdown() above (same per-row assembly from the
+    same kind of Python dicts, just the _TOP-suffixed ones), with its own
+    rank order (get_master_rank_order_top()), own weight pool
+    (WEIGHT_MAP_TOP), and its own top-appropriate status wording via
+    _TOP_STATUS_TEXT above. No Power Law veto row here -- Power Law is a
+    bottom-calling model with no published top-side analog, so it isn't
+    duplicated onto this table. No consecutive-days annotation either --
+    that's a top-7-by-weight feature and WEIGHT_MAP_TOP is still empty
+    (Phase 2)."""
+    rows = []
+    for i, token in enumerate(get_master_rank_order_top(), start=1):
+        name = DISPLAY_NAMES.get(token, token)
+        target = values.get(f"{token}_TOP_TARGET", "—")
+        formatter = READING_FORMATTERS.get(token)
+        if formatter:
+            reading_val = formatter(values)
+        else:
+            reading_val = values.get(token)
+            reading_val = "—" if reading_val is None else reading_val
+
+        caveat = NAME_CAVEAT.get(token, "")
+        caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
+        tooltip_text = TOOLTIP_TEXT_TOP.get(token, "")
+        tooltip_html = (
+            f' <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span>'
+            f'<span class="tip-content">{tooltip_text}</span></span>'
+        ) if tooltip_text else ""
+        is_weighted = token in WEIGHT_MAP_TOP
+        anchor_html = ' <span class="anchor-icon">⚓</span>' if is_weighted else ""
+        name_cell = f"{name}{caveat_html}{tooltip_html}{anchor_html}"
+
+        src_url, src_label = SOURCE_URL.get(token, (None, "—"))
+        source_html = f'<a href="{src_url}" target="_blank">{src_label}</a>' if src_url else src_label
+
+        show_real_status = is_weighted or token in DISPLAYABLE_BUT_UNWEIGHTED_TOP
+        if show_real_status:
+            css = values.get(f"{token}_TOP_STATUS_CLASS")
+            label = values.get(f"{token}_TOP_STATUS_LABEL", "CHECK")
+            if css in _TOP_STATUS_TEXT:
+                status_text, status_css = _TOP_STATUS_TEXT[css], css
+            elif css == "st-watch":
+                status_text, status_css = label, "st-watch"
+            elif css == "st-no":
+                status_text, status_css = label, "st-no"
+            elif css == "st-mid" and label and label != "CHECK":
+                # Real, non-generic st-mid state (e.g. Pi Cycle's own
+                # NOT CROSSED / BUILDING HISTORY text) reaches the page
+                # as-is, same discipline as the NVT_GC fix on Table 1.
+                status_text, status_css = label, "st-mid"
+            else:
+                status_text, status_css = "NO READING TODAY", "st-mid"
+        elif token in EXCLUSION_REASONS_TOP:
+            status_text, status_css = "NOT YET SCORED", "st-mid"
+        else:
+            status_text, status_css = "NOT SCORED", "st-mid"
+
+        if is_weighted:
+            weight = WEIGHT_MAP_TOP[token]
+            pct_of_total = round((weight / sum(WEIGHT_MAP_TOP.values())) * 100, 1)
+            weight_display = f"{pct_of_total}%"
+            rows.append(
+                f'<tr><td class="rank-num">{i}</td><td class="ind-name">{name_cell}</td>'
+                f'<td class="reading">{reading_val}</td>'
+                f'<td class="reading">{weight_display}</td>'
+                f'<td class="target">{target}</td>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span></td>'
+                f'<td class="ind-source">{source_html}</td></tr>'
+            )
+        else:
+            reason = EXCLUSION_REASONS_TOP.get(token, "Not currently scored")
+            rows.append(
+                f'<tr class="rank-na"><td class="rank-num">{i}</td>'
+                f'<td class="ind-name">{name_cell}<div class="na-reason">{reason}</div></td>'
+                f'<td class="reading">{reading_val}</td>'
+                f'<td class="reading">N/A</td>'
+                f'<td class="target">{target}</td>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span></td>'
+                f'<td class="ind-source">{source_html}</td></tr>'
+            )
+    return "\n".join(rows)
+
+
 # Colors: st-strong-buy/st-buy/st-near get their own color (a fired slice
 # reads as fired at a glance); everything else (st-no/st-mid/st-watch)
 # falls back to muted grey -- deliberately not enumerated per-class,
@@ -1690,6 +2040,49 @@ def build_weight_pie_svg(values):
     slices = [(DISPLAY_NAMES.get(t, t), w, values.get(f"{t}_STATUS_CLASS", "st-mid"))
               for t, w in WEIGHT_MAP.items()]
     total = sum(w for _, w, _ in slices)
+    cx, cy, r = 150, 150, 120
+    fired_count = sum(1 for _, _, css in slices if css in ("st-strong-buy", "st-buy", "st-near"))
+
+    paths = []
+    cum_weight = 0.0
+    angle = 0.0
+    for label, weight, css in slices:
+        cum_weight += weight
+        start = angle
+        end = (cum_weight / total) * 360
+        angle = end
+        large_arc = 1 if (end - start) > 180 else 0
+        sx = cx + r * math.sin(math.radians(start)); sy = cy - r * math.cos(math.radians(start))
+        ex = cx + r * math.sin(math.radians(end)); ey = cy - r * math.cos(math.radians(end))
+        color = PIE_COLOR_MAP.get(css, PIE_GREY)
+        frac = weight / total
+        paths.append(
+            f'<path d="M{cx},{cy} L{sx:.2f},{sy:.2f} A{r},{r} 0 {large_arc},1 {ex:.2f},{ey:.2f} Z" '
+            f'fill="{color}"><title>{label}: {round(frac * 100, 1)}%</title></path>'
+        )
+    center_text = (
+        f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="middle" '
+        f'fill="white" font-size="20">{fired_count}/{len(slices)} fired</text>'
+    )
+    return f'<svg viewBox="0 0 300 300" width="260" height="260">{"".join(paths)}{center_text}</svg>'
+
+
+def build_weight_pie_svg_top(values):
+    """Table 3's own pie chart -- same slice-boundary math as
+    build_weight_pie_svg() above (same running-total approach, same
+    floating-point-safe closure), reading WEIGHT_MAP_TOP and the
+    "_TOP_STATUS_CLASS"-suffixed values instead. WEIGHT_MAP_TOP is still
+    empty through Phase 2, so this explicitly handles the zero-weight case
+    (the original function never needed to, since WEIGHT_MAP always has
+    real entries) rather than dividing by zero."""
+    slices = [(DISPLAY_NAMES.get(t, t), w, values.get(f"{t}_TOP_STATUS_CLASS", "st-mid"))
+              for t, w in WEIGHT_MAP_TOP.items()]
+    total = sum(w for _, w, _ in slices)
+    if not total:
+        return ('<svg viewBox="0 0 300 300" width="260" height="260">'
+                '<circle cx="150" cy="150" r="120" fill="#3a4150"/>'
+                '<text x="150" y="150" text-anchor="middle" dominant-baseline="middle" '
+                'fill="white" font-size="16">No weighted indicators yet</text></svg>')
     cx, cy, r = 150, 150, 120
     fired_count = sum(1 for _, _, css in slices if css in ("st-strong-buy", "st-buy", "st-near"))
 
@@ -1777,6 +2170,44 @@ def build_signal_summary_html(values):
     </div>'''
 
 
+def _count_bucket_top(values, tokens):
+    """Table 3 equivalent of _count_bucket() -- reads WEIGHT_MAP_TOP and
+    "_TOP_STATUS_CLASS" instead."""
+    scored = [t for t in tokens if t in WEIGHT_MAP_TOP]
+    buy = [t for t in scored if values.get(f"{t}_TOP_STATUS_CLASS") in ("st-strong-buy", "st-buy", "st-near")]
+    n_scored = len(scored)
+    n_buy = len(buy)
+    pct = round((n_buy / n_scored) * 100, 1) if n_scored else 0.0
+    return n_buy, n_scored, pct
+
+
+def build_signal_summary_html_top(values):
+    """Table 3's own summary box -- simpler than build_signal_summary_html()
+    above by design: Table 3 has ~10 indicators total, not the ~20 Table 1
+    has, so a Core/Self-computed split would be an arbitrary categorical
+    line with nothing real behind it. One fraction (all weighted
+    indicators) plus the main weighted percentage is proportionate to the
+    actual indicator count. Reuses the same .summary-box/.summary-cell CSS
+    already defined for Table 1 -- no new styling needed."""
+    all_buy, all_total, all_pct = _count_bucket_top(values, tuple(WEIGHT_MAP_TOP.keys()))
+    weighted_pct = values.get("VERDICT_PCT_TOP")
+    weighted_pct_display = f"{weighted_pct}%" if weighted_pct is not None else "\u2014"
+
+    return f'''<div class="summary-box">
+      <div class="summary-row">
+        <div class="summary-cell">
+          <div class="summary-frac">{all_buy}/{all_total}</div>
+          <div class="summary-label">All weighted indicators signaling top</div>
+          <div class="summary-pct">{all_pct}%</div>
+        </div>
+        <div class="summary-cell summary-cell-main">
+          <div class="summary-pct-main">{weighted_pct_display}</div>
+          <div class="summary-label">\u26a0\ufe0f Actual weighted percentage \u26a0\ufe0f</div>
+        </div>
+      </div>
+    </div>'''
+
+
 def build_verdict(values):
     scored, excluded_names, buy_names = [], [], []
     for token, weight in WEIGHT_MAP.items():
@@ -1842,6 +2273,71 @@ def build_verdict(values):
         "VERDICT_BUY_LIST": ", ".join(buy_names) if buy_names else "none this run",
         "VERDICT_EXCLUDED_COUNT": len(excluded_names),
         "VERDICT_EXCLUDED_LIST": ", ".join(excluded_names) if excluded_names else "none",
+    }
+
+
+def build_verdict_top(values):
+    """Table 3's own verdict -- same mechanical weighted-tally structure as
+    build_verdict() above (same st-strong-buy/st-buy/st-near/st-no
+    classification, same "excluded this run" bucket for st-mid/missing),
+    reading WEIGHT_MAP_TOP and "_TOP_STATUS_CLASS" instead. Copy is
+    reframed for top/euphoria confluence rather than bottom/accumulation
+    language -- these are different claims about different market phases,
+    not a reworded mirror. With WEIGHT_MAP_TOP still empty (Phase 2),
+    total_weight is always 0 here, so this always returns the
+    "Insufficient data" case honestly -- exactly as it should until Phase 3
+    adds real weights."""
+    scored, excluded_names, top_names = [], [], []
+    for token, weight in WEIGHT_MAP_TOP.items():
+        css = values.get(f"{token}_TOP_STATUS_CLASS")
+        name = DISPLAY_NAMES.get(token, token)
+        if css in ("st-strong-buy", "st-buy"):
+            scored.append((token, weight, True))
+            top_names.append(name)
+        elif css == "st-near":
+            scored.append((token, weight, True))
+            top_names.append(f"{name} (approaching)")
+        elif css == "st-no":
+            scored.append((token, weight, False))
+        else:
+            excluded_names.append(name)
+
+    total_weight = sum(w for _, w, _ in scored)
+    top_weight = sum(w for _, w, top in scored if top)
+    pct = round((top_weight / total_weight) * 100, 1) if total_weight else None
+    top_count = sum(1 for _, _, top in scored if top)
+    total_count = len(scored)
+
+    if pct is None:
+        headline = "Insufficient data this run"
+        body = ("Not enough Table 3 indicators currently carry real weight to synthesize a top-side verdict "
+                "yet — Phase 3 hasn't assigned weights. Individual indicator statuses above are still real and "
+                "live; this synthesis line just doesn't exist until weights do.")
+    elif pct < 25:
+        headline = "Minimal top confluence"
+        body = ("Few of the weighted indicators are in overheated/top-favorable territory right now. "
+                "Historically, a reading this low has not coincided with a cycle top.")
+    elif pct < 50:
+        headline = "Partial top confluence — early euphoria signs"
+        body = ("A meaningful minority of indicators are flashing overheated. In prior cycles, this stage has "
+                "preceded the actual top by weeks to months, not confirmed it.")
+    elif pct < 75:
+        headline = "Strong top confluence forming"
+        body = ("A majority of tracked top-side indicators are now aligned toward euphoria/overheated "
+                "territory. Historically a zone worth taking seriously, though not by itself a confirmed top.")
+    else:
+        headline = "Near-maximal top confluence"
+        body = ("Almost every tracked top-side indicator is aligned toward euphoria — the configuration that "
+                "has historically clustered around, or shortly preceded, past cycle tops.")
+
+    return {
+        "VERDICT_PCT_TOP": pct if pct is not None else "—",
+        "VERDICT_COUNT_TOP": f"{top_count}/{total_count}",
+        "VERDICT_HEADLINE_TOP": headline,
+        "VERDICT_BODY_TOP": body,
+        "VERDICT_TOP_LIST_TOP": ", ".join(top_names) if top_names else "none this run",
+        "VERDICT_EXCLUDED_COUNT_TOP": len(excluded_names),
+        "VERDICT_EXCLUDED_LIST_TOP": ", ".join(excluded_names) if excluded_names else "none",
     }
 
 
@@ -2254,6 +2750,124 @@ def main():
     # row's weight/status logic already uses.
     values["SIGNAL_SUMMARY_BOX"] = build_signal_summary_html(values)
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")
+
+    # -----------------------------------------------------------------
+    # TABLE 3 — Cycle Top Rank & Weight. Phase 2: every indicator computes
+    # and stores a REAL status under its own "_TOP"-suffixed values keys;
+    # WEIGHT_MAP_TOP stays empty (Phase 3's job). Genuinely separate weight
+    # pool, rank order, verdict, summary box, and pie chart from Table 1 --
+    # see WEIGHT_MAP_TOP's own comment for why a shared pool would defeat
+    # the point. Indicators whose raw value is shared with Table 1 reuse
+    # the exact same rolling-history cache key (e.g. "MVRV_Z__history") --
+    # no new fetch, no duplicated history, just a different comparison
+    # direction/threshold against the same underlying data.
+    # -----------------------------------------------------------------
+    print("Computing Table 3 (Cycle Top) indicators...")
+
+    print("  Fetching Pi Cycle Top (BGeometrics pi-cycle, genuinely new)...")
+    pi_sma111, pi_sma350x2 = fetch_pi_cycle_latest()
+    if pi_sma111 is not None and pi_sma350x2 is not None and pi_sma350x2:
+        pi_pct_away = round((pi_sma350x2 - pi_sma111) / pi_sma350x2 * 100, 2)
+        pi_crossed = pi_sma111 >= pi_sma350x2
+        values["PI_CYCLE_TOP"] = pi_pct_away
+        if pi_crossed:
+            values["PI_CYCLE_TOP_STATE"] = "CROSSED"
+            values["PI_CYCLE_TOP_TOP_STATUS_LABEL"] = "CROSSED — 111d SMA above 2x 350d SMA"
+            values["PI_CYCLE_TOP_TOP_STATUS_CLASS"] = "st-strong-buy"
+        elif pi_pct_away <= 5:
+            # "Approaching" band: a disclosed judgment call (not a
+            # researched/published number like the crossover formula
+            # itself), purely for display bucketing -- does not feed
+            # WEIGHT_MAP_TOP scoring at all in Phase 2.
+            values["PI_CYCLE_TOP_STATE"] = "APPROACHING"
+            values["PI_CYCLE_TOP_TOP_STATUS_LABEL"] = f"APPROACHING — {pi_pct_away}% away from crossing"
+            values["PI_CYCLE_TOP_TOP_STATUS_CLASS"] = "st-near"
+        else:
+            values["PI_CYCLE_TOP_STATE"] = "NOT CROSSED"
+            values["PI_CYCLE_TOP_TOP_STATUS_LABEL"] = f"NOT CROSSED — {pi_pct_away}% away"
+            values["PI_CYCLE_TOP_TOP_STATUS_CLASS"] = "st-no"
+    else:
+        values["PI_CYCLE_TOP"] = None
+        values["PI_CYCLE_TOP_STATE"] = "CHECK"
+        values["PI_CYCLE_TOP_TOP_STATUS_LABEL"] = "CHECK"
+        values["PI_CYCLE_TOP_TOP_STATUS_CLASS"] = "st-mid"
+    values["PI_CYCLE_TOP_TOP_TARGET"] = target_for_top("PI_CYCLE_TOP")
+    print(f"    Pi Cycle Top: 111d={pi_sma111}, 350dx2={pi_sma350x2} -> {values['PI_CYCLE_TOP_STATE']}")
+
+    # MVRV Z-Score, Puell, Thermocap: rolling TOP-decile percentile of the
+    # SAME trailing history Table 1 already built for these tokens (Phase 1
+    # decision -- their historically-cited fixed top thresholds decline
+    # every cycle, so a self-adjusting percentile is used instead, exactly
+    # like Thermocap/NRPL's bottom-table treatment). Each conditionally
+    # JOINS WEIGHT_MAP_TOP here, only once threshold is real (n>=90) --
+    # never a static entry (see WEIGHT_MAP_TOP's own comment for why).
+    TOP_PERCENTILE_WEIGHTS = {"MVRV_Z": 1.5, "PUELL": 1.5, "THERMOCAP": 1.0}
+    for token, join_weight in TOP_PERCENTILE_WEIGHTS.items():
+        fresh_val = values.get(token)
+        threshold, n_points = rolling_threshold(cache, token, percentile=100 - PERCENTILE_CUTOFF)
+        if threshold is not None and fresh_val is not None:
+            label, css = status_pill(fresh_val, "high", threshold, cache=cache, token=token)
+            values[f"{token}_TOP_STATUS_LABEL"] = label
+            values[f"{token}_TOP_STATUS_CLASS"] = css
+            values[f"{token}_TOP_TARGET"] = f"≥ {round(threshold, 2)} (live, {100 - PERCENTILE_CUTOFF}th pct. of trailing {n_points}d)"
+            WEIGHT_MAP_TOP[token] = join_weight
+            print(f"    {token} (top): rolling {100 - PERCENTILE_CUTOFF}th percentile threshold = {round(threshold, 2)} (n={n_points}) -> {label}")
+        else:
+            values[f"{token}_TOP_STATUS_LABEL"] = "BUILDING HISTORY"
+            values[f"{token}_TOP_STATUS_CLASS"] = "st-mid"
+            values[f"{token}_TOP_TARGET"] = f"N/A — building history ({n_points}/{MIN_HISTORY_DAYS} days)"
+            print(f"    {token} (top): only {n_points}/{MIN_HISTORY_DAYS} days of history accumulated, staying N/A")
+
+    # Reserve Risk: fixed threshold (0.02, single-sourced/Medium confidence
+    # per Phase 1), same shared cache/token as Table 1's Reserve Risk.
+    reserve_risk_val = values.get("RESERVE_RISK")
+    label, css = status_pill(reserve_risk_val, "high", 0.02, cache=cache, token="RESERVE_RISK")
+    values["RESERVE_RISK_TOP_STATUS_LABEL"], values["RESERVE_RISK_TOP_STATUS_CLASS"] = label, css
+    values["RESERVE_RISK_TOP_TARGET"] = target_for_top("RESERVE_RISK")
+
+    # RSI (weekly, threshold=80 not the generic daily 70), Bollinger %B
+    # (0.8), Mayer Multiple (2.4) — all fixed, researched thresholds, same
+    # shared cache/token as their Table 1 counterparts.
+    for token, threshold in (("RSI", 80.0), ("BOLLINGER", 0.8), ("MAYER", 2.4)):
+        val = values.get(token)
+        label, css = status_pill(val, "high", threshold, cache=cache, token=token)
+        values[f"{token}_TOP_STATUS_LABEL"], values[f"{token}_TOP_STATUS_CLASS"] = label, css
+        values[f"{token}_TOP_TARGET"] = target_for_top(token)
+
+    # Fear & Greed: Extreme Greed at >=75 (alternative.me's own published
+    # band boundary), same shared cache/token as Table 1's Fear & Greed.
+    fng_val = values.get("FNG")
+    label, css = status_pill(fng_val, "high", 75.0, cache=cache, token="FNG")
+    values["FNG_TOP_STATUS_LABEL"], values["FNG_TOP_STATUS_CLASS"] = label, css
+    values["FNG_TOP_TARGET"] = target_for_top("FNG")
+
+    # NVT Golden Cross: >2.2 is fully wired through status_pill() here,
+    # unlike Table 1's own hardcoded OVERPRICED branch. Those are two
+    # different situations, not an inconsistency: on Table 1, OVERPRICED
+    # is explicitly kept OUT of status_pill() because that call's leeway
+    # machinery is calibrated for the BUY-side (-1.6) case -- running the
+    # overpriced reading through it would attach buy-favorable-flavored
+    # "BORDERLINE BUY" language to a bottom-focused table's high reading,
+    # which is backwards. Here on Table 3, ">2.2, direction=high" IS the
+    # actual comparison this table cares about, so routing it through
+    # status_pill() is the correct, direct fix -- same shared "NVT_GC__
+    # history" cache/token as every other Table 3 indicator, same pattern
+    # as Reserve Risk/RSI/Bollinger/Mayer/FNG above. Gets the real four-
+    # tier system (STRONG TOP SIGNAL / TOP-FAVORABLE / APPROACHING TOP /
+    # NORMAL) instead of a flat boolean.
+    nvt_gc_val = values.get("NVT_GC")
+    label, css = status_pill(nvt_gc_val, "high", 2.2, cache=cache, token="NVT_GC")
+    values["NVT_GC_TOP_STATUS_LABEL"], values["NVT_GC_TOP_STATUS_CLASS"] = label, css
+    values["NVT_GC_TOP_TARGET"] = target_for_top("NVT_GC")
+
+    print("Building Table 3 (Cycle Top) verdict synthesis...")
+    values["FULL_WEIGHTED_BREAKDOWN_ROWS_TOP"] = build_full_weighted_breakdown_top(values, cache)
+    values["WEIGHT_PIE_SVG_TOP"] = build_weight_pie_svg_top(values)
+    values["TOTAL_TRACKED_COUNT_TOP"] = len(_ALL_TRACKED_TOKENS_TOP)
+    verdict_top = build_verdict_top(values)
+    values.update(verdict_top)
+    values["SIGNAL_SUMMARY_BOX_TOP"] = build_signal_summary_html_top(values)
+    print(f"  Table 3 Verdict: {verdict_top['VERDICT_HEADLINE_TOP']} ({verdict_top['VERDICT_PCT_TOP']}%, {verdict_top['VERDICT_COUNT_TOP']} weighted-top)")
 
     with open("dashboard_template.html", "r", encoding="utf-8") as f:
         html = f.read()
