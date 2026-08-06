@@ -2014,6 +2014,19 @@ def main():
     # Skip the fresh comparison if the realized-price figure itself is a
     # stale cache fallback — don't compare today's live spot price against
     # a days-old cost-basis snapshot and present it with fresh confidence.
+    #
+    # Deliberately NOT using cache/token="REALIZED_PRICE" for the leeway
+    # calc: that history key (populated above, in the generic BG_METRICS
+    # loop) tracks the realized-price FEED itself -- the threshold side of
+    # this comparison, not the value actually being compared (spot price).
+    # The realized-price feed moves by single-digit-dollars/day; spot price
+    # moves by hundreds to thousands. Feeding the former into a sigma meant
+    # to characterize the latter would eventually produce a wildly
+    # miscalibrated band/strong-buy trigger once real n>=20 history
+    # accumulates there (today it's masked by the flat 3% bootstrap, since
+    # n<20, but that's a matter of days away). REALIZED_PRICE_GAP is a
+    # separate history series tracking the actual compared value (spot
+    # price) instead, so its sigma measures what it's supposed to.
     realized_price_val = values.get("REALIZED_PRICE")
     realized_price_is_stale = values.get("REALIZED_PRICE_STATUS_LABEL", "").startswith("STALE")
     if realized_price_is_stale:
@@ -2021,7 +2034,8 @@ def main():
     elif realized_price_val is not None and spot_price is not None:
         try:
             rp = float(realized_price_val)
-            rp_label, rp_css = status_pill(spot_price, "low", rp, cache=cache, token="REALIZED_PRICE")
+            history_append(cache, "REALIZED_PRICE_GAP", spot_price)
+            rp_label, rp_css = status_pill(spot_price, "low", rp, cache=cache, token="REALIZED_PRICE_GAP")
         except (TypeError, ValueError):
             rp_label, rp_css = "CHECK", "st-mid"
     else:
