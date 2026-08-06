@@ -1278,7 +1278,7 @@ WEIGHT_MAP = {
     "LTH_SOPR": 2, "NVT_GC": 2, "ASOPR_EST": 1.5,
     "PROD_COST": 2.5,
     # Tier 3 — behavioral/technical (weight 1.5)
-    "MINER_CAP": 1.5, "MACD": 1.5,
+    "MINER_CAP": 1.5,
     # Tier 4 — sentiment/blunt technicals (weight 1)
     # Note: Mayer, RSI, and Bollinger are mutually correlated (all derived
     # from the same underlying price series, just different windows) —
@@ -1286,6 +1286,16 @@ WEIGHT_MAP = {
     # already-minimal weight has little practical effect and risks false
     # precision rather than reflecting a real finding.
     "SUPPLY_LOSS": 1, "MAYER": 1, "RSI": 1, "FNG": 1, "BOLLINGER": 1,
+    # MACD discounted from 1.5 to 1.0 (evidence-based, not a redundancy/
+    # confidence-tier discount like aSOPR's above): backtest_indicators.py
+    # found a near-coin-flip 46.7% success rate at 365 days and a negative
+    # average return at 90 days (-11.5%) across 20 real firing events —
+    # weak enough forward performance to warrant a real discount, not just
+    # a "different holder cohort" or "not yet fully validated" caveat.
+    # NVT Golden Cross and Active Addresses also showed mixed backtest
+    # results but are left untouched for now — under observation, not
+    # adjusted yet.
+    "MACD": 1.0,
 }
 
 DISPLAY_NAMES = {
