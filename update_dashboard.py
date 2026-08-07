@@ -289,6 +289,36 @@ def get_adaptive_mvrv_threshold(cache, percentile=MVRV_ADAPTIVE_PERCENTILE,
     return compute_percentile(values[-window_days:], percentile), n
 
 
+# Table 2 (Momentum Shift) — MVRV Momentum. Two independently-corroborated
+# sources treat "price/ratio vs. its own trailing moving average" as a
+# genuine momentum (not level) read -- the same "own trailing history,
+# self-normalizing" philosophy already used above for the adaptive MVRV
+# bottom threshold, just measuring deceleration instead of cheapness. A
+# full year is needed before a "365-day average" claim is honest -- below
+# that gate this returns (None, n) so callers show real accumulation
+# progress instead of an early, noisy average, same bootstrap-safety shape
+# as get_adaptive_mvrv_threshold() above and the Thermocap/NRPL rolling-
+# percentile system on Table 1.
+MVRV_MOMENTUM_WINDOW_DAYS = 365
+MVRV_MOMENTUM_MIN_DAYS = 365
+
+
+def get_mvrv_momentum_ma(cache, window_days=MVRV_MOMENTUM_WINDOW_DAYS,
+                          min_days=MVRV_MOMENTUM_MIN_DAYS):
+    """Returns (trailing_365d_average, n_points), or (None, n_points) below
+    the bootstrap gate. Reads the exact same "MVRV_Z__history" cache Table
+    1/3 already populate every run -- zero extra API cost, zero new
+    history series. Plain arithmetic mean (not a percentile) is the right
+    tool here: this measures where today sits relative to its own recent
+    trend, not where it ranks in a distribution."""
+    values = cache.get("MVRV_Z__history", {}).get("values", [])
+    n = len(values)
+    if n < min_days:
+        return None, n
+    window = values[-window_days:]
+    return sum(window) / len(window), n
+
+
 # ---------------------------------------------------------------------------
 # "Near-threshold" leeway. Real research behind this, not a guess: the
 # credible sources for exactly this problem (TradingView's own documented
@@ -856,6 +886,25 @@ def compute_weekly_macd(price_history, fast=12, slow=26, signal=9):
     prev_histogram = macd_line[-2] - signal_line[-2] if len(macd_line) > 1 else histogram
     just_crossed_bullish = prev_histogram <= 0 and histogram > 0
     return round(histogram, 1), just_crossed_bullish
+
+
+def compute_weekly_macd_histogram_series(price_history, fast=12, slow=26, signal=9, lookback=3):
+    """Table 2 (Momentum Shift) helper -- the trailing `lookback` weekly
+    histogram values (most recent last), for the "Two-Bar Fade" slope
+    check below. Same weekly-resampled EMA machinery as
+    compute_weekly_macd() above (zero new data, zero new fetch), just
+    exposing more of the already-computed histogram series instead of
+    collapsing it to a single latest-vs-previous delta. Returns None if
+    there isn't enough weekly history to fill the requested window."""
+    weekly = resample_weekly(price_history)
+    if len(weekly) < slow + signal + lookback - 1:
+        return None
+    ema_fast = _ema_series(weekly, fast)
+    ema_slow = _ema_series(weekly, slow)
+    macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
+    signal_line = _ema_series(macd_line, signal)
+    histogram = [m - s for m, s in zip(macd_line, signal_line)]
+    return [round(h, 2) for h in histogram[-lookback:]]
 
 
 def compute_bollinger(price_history, period=20, num_std=2):
@@ -1599,6 +1648,45 @@ WEIGHT_MAP_TOP = {
     # and 1.0 respectively.
 }
 
+# ---------------------------------------------------------------------------
+# WEIGHT_MAP_MOMENTUM -- Table 2's own weight pool, "Momentum Shift Rank &
+# Weight." Genuinely separate from both WEIGHT_MAP (level/threshold calls)
+# and WEIGHT_MAP_TOP (top-side confluence): every indicator here is a
+# LEADING deceleration signal that fires while price is still rising, before
+# either a bottom-confirmation (Table 1) or top-confirmation (Table 3)
+# signal has any reason to. Never summed with either other pool -- see the
+# Phase 1 redundancy-check notes (commit message) for why that would be a
+# real problem if it were, and why it isn't one held in separate pools.
+#
+# WEIGHT ASSIGNMENT (tier-confidence framework, same as every other table):
+#   RSI_DIVERGENCE (1.5): real, citable methodology -- classic bearish
+#   price/RSI divergence via swing-high pivot detection, the same class of
+#   pattern-match already proven honest on Table 1's MVRV-Z/price divergence
+#   card. Matched to Thermocap/NRPL's own Tier-3 starting weight.
+#
+#   MACD_SLOPE (1.0): the "Two-Bar Fade" (still-positive but shrinking
+#   histogram) is a repeated trading heuristic, not an academic standard or
+#   a citable published methodology the way RSI Divergence's pivot detection
+#   is -- deliberately weighted BELOW RSI Divergence rather than treated as
+#   an equal-confidence sibling, one notch down at Table 1's own MACD/floor
+#   tier.
+#
+#   MVRV_MOMENTUM: NOT a static entry here -- exactly the Thermocap/NRPL
+#   bootstrap pattern. Its own trailing-365-day-average construction has
+#   zero meaning below a full year of accumulated MVRV_Z history, so it
+#   joins WEIGHT_MAP_MOMENTUM conditionally at runtime in main() (at 1.5,
+#   matching Thermocap/NRPL's own Tier-3 weight), only once real. Until
+#   then it's real-but-unweighted, same discipline as every other bootstrap
+#   case on this dashboard -- a status has to exist and be tested before it
+#   goes anywhere near a weight.
+# ---------------------------------------------------------------------------
+WEIGHT_MAP_MOMENTUM = {
+    "RSI_DIVERGENCE": 1.5,
+    "MACD_SLOPE": 1.0,
+    # MVRV_MOMENTUM deliberately absent -- see the comment block above. Joins
+    # at runtime in main() only once its 365-day bootstrap gate is real.
+}
+
 DISPLAY_NAMES = {
     "MVRV_Z": "MVRV Z-Score", "REALIZED_PRICE": "Price vs. Realized Price",
     "PUELL": "Puell Multiple", "RESERVE_RISK": "Reserve Risk",
@@ -1612,6 +1700,9 @@ DISPLAY_NAMES = {
     "DRAWDOWN": "Drawdown Magnitude",
     "ACTIVE_ADDR_DEV": "Active Addresses Power-Law Deviation",
     "PI_CYCLE_TOP": "Pi Cycle Top",
+    "RSI_DIVERGENCE": "RSI Divergence (bearish)",
+    "MACD_SLOPE": "MACD Histogram Slope",
+    "MVRV_MOMENTUM": "MVRV Momentum (vs. 365d MA)",
 }
 
 # Short subtitle shown right after an indicator's name, before its tooltip
@@ -1656,6 +1747,9 @@ TOOLTIP_TEXT = {
     "BOLLINGER": 'Where price sits in its volatility envelope — 0 = touching lower band. Volatility context, not a valuation signal.',
     "CYCLE_RHYTHM": 'Calendar-only projection. <strong>Not counted</strong> — a date, not a threshold. Already broke once on the last cycle leg (376–381 vs. claimed 364 days).',
     "ACTIVE_ADDR_DEV": 'Santostasi\'s own model states Bitcoin\'s price, hash rate, and active addresses are "all power laws of each other and of time" — this fits active addresses to its own power-law trend (OLS regression of log(addresses) vs. log(days since genesis), R&sup2; ≈ 0.83 on the full genesis-to-now fit) and measures how far today sits below that trend. Sourced from BGeometrics\' own chart data file, not their versioned API — an unofficial source, flagged as such deliberately. No fixed published threshold exists, so like Thermocap/NRPL this computes its own: the bottom 10th percentile of its own trailing daily history. Scored at reduced (Tier 3) weight — a genuinely novel construction with no track record against past cycle bottoms yet.',
+    "RSI_DIVERGENCE": 'Price makes a higher high while weekly RSI makes a lower high — momentum deceleration during a still-rising market, the classic leading bearish-divergence pattern. Pivot/swing-high detection (14-day left/right lookback over a trailing 180-day window), matched against the same weekly RSI history Table 1/3 already compute — zero new data. A pattern match, not a threshold crossing, so it reports DETECTED/NOT DETECTED rather than a leeway band, the same honest-state discipline as Table 1\'s own MVRV-Z/price divergence card.',
+    "MACD_SLOPE": 'The "Two-Bar Fade" convention: MACD histogram still positive, but shrinking for 2 consecutive weekly bars after its most recent peak — a fading bullish push, not yet a bearish cross. A repeated trading heuristic, not an academic standard (unlike RSI Divergence\'s citable pivot methodology), hence the lower of Table 2\'s two starting weights. Same weekly 12/26/9 MACD already computed for Table 1, just exposing more of its own histogram series.',
+    "MVRV_MOMENTUM": 'Current MVRV Z-Score vs. its own trailing 365-day moving average — a rate-of-change read on the same ratio Table 1 scores as a raw level, catching deceleration even while the absolute level still looks elevated. Needs a full year of accumulated daily history before a "365-day average" claim is honest — wired in now so it starts accumulating, same bootstrap-honesty pattern as Thermocap/NRPL.',
 }
 
 # Table 3 (Cycle Top) tooltip text -- a separate dict, not reused entries in
@@ -1705,6 +1799,9 @@ SOURCE_URL = {
     "CYCLE_RHYTHM": (None, "pure date math"),
     "ACTIVE_ADDR_DEV": ("https://charts.bgeometrics.com/address_active_dark.html", "view"),
     "PI_CYCLE_TOP": ("https://coincodex.com/bitcoin-pi-cycle-top-indicator/", "method"),
+    "RSI_DIVERGENCE": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
+    "MACD_SLOPE": ("https://www.coingecko.com/en/coins/bitcoin", "data"),
+    "MVRV_MOMENTUM": ("https://charts.bgeometrics.com/mvrv.html", "view"),
 }
 
 # Per-token reading-cell formatters, ported verbatim from the richer
@@ -1804,6 +1901,28 @@ def target_for_top(token):
     return TARGET_LABELS_TOP.get(token, "\u2014")
 
 
+# Table 2 (Momentum Shift) target labels. MVRV_MOMENTUM is deliberately NOT
+# here -- same reasoning as MVRV_Z/PUELL/THERMOCAP on Table 3: its target is
+# the live 365-day trailing average, a dynamic number set directly in
+# main() once real, not a static string. RSI_DIVERGENCE and MACD_SLOPE
+# ARE static here -- unlike a percentile bootstrap, a pattern-match target
+# doesn't change shape as history accumulates, only whether it's currently
+# true.
+#
+# "Two-Bar Fade" = 2 consecutive weekly histogram declines after the most
+# recent peak, all while still positive -- 3 total trailing bars checked.
+MACD_FADE_BARS = 3
+
+TARGET_LABELS_MOMENTUM = {
+    "RSI_DIVERGENCE": "No bearish price/RSI divergence (pivot-based pattern match, not a level \u2014 live once 2+ swing highs exist)",
+    "MACD_SLOPE": f"Histogram not fading \u2014 no {MACD_FADE_BARS - 1}+ consecutive weekly declines while still positive",
+}
+
+
+def target_for_momentum(token):
+    return TARGET_LABELS_MOMENTUM.get(token, "\u2014")
+
+
 # Full rank order, matching the original ranked analysis from early in this
 # project (Power Law first, everything else in the same priority order
 # established then) — this is the single reference used to build the rank
@@ -1870,6 +1989,28 @@ def get_master_rank_order_top():
     return scored + unscored
 
 
+# Table 2 (Momentum Shift) pool of tracked tokens -- fallback/tiebreak
+# reference only, same discipline as the other two tables' own lists.
+# RSI_DIVERGENCE listed first (strongest citation, per WEIGHT_MAP_MOMENTUM's
+# own comment), then MVRV_MOMENTUM (ties RSI_DIVERGENCE's weight once
+# bootstrapped), then MACD_SLOPE last (weakest citation, lowest weight
+# regardless of tiebreak).
+_ALL_TRACKED_TOKENS_MOMENTUM = ["RSI_DIVERGENCE", "MVRV_MOMENTUM", "MACD_SLOPE"]
+
+
+def get_master_rank_order_momentum():
+    """Table 2's own rank-order function -- structurally identical to
+    get_master_rank_order()/get_master_rank_order_top() above (same
+    sort-by-real-weight-first logic, same never-hand-written-order
+    discipline), just reading WEIGHT_MAP_MOMENTUM and
+    _ALL_TRACKED_TOKENS_MOMENTUM instead."""
+    tiebreak = {t: i for i, t in enumerate(_ALL_TRACKED_TOKENS_MOMENTUM)}
+    scored = [t for t in _ALL_TRACKED_TOKENS_MOMENTUM if t in WEIGHT_MAP_MOMENTUM]
+    unscored = [t for t in _ALL_TRACKED_TOKENS_MOMENTUM if t not in WEIGHT_MAP_MOMENTUM]
+    scored.sort(key=lambda t: (-WEIGHT_MAP_MOMENTUM[t], tiebreak[t]))
+    return scored + unscored
+
+
 # Short, one-line reasons for every indicator that can never contribute a
 # scored vote — shown as a bullet under its row instead of a percentage.
 EXCLUSION_REASONS = {
@@ -1923,6 +2064,21 @@ EXCLUSION_REASONS_TOP = {
     "MVRV_Z": "Rolling percentile threshold (own peak value has declined every cycle — see Phase 1 research) — joins WEIGHT_MAP_TOP at weight 1.5 once n>=90",
     "PUELL": "Rolling percentile threshold (same declining-per-cycle pattern as MVRV Z-Score) — joins WEIGHT_MAP_TOP at weight 1.5 once n>=90",
     "THERMOCAP": "Rolling percentile threshold (no credible single fixed top number — see Phase 1 research) — joins WEIGHT_MAP_TOP at weight 1.0 once n>=90",
+}
+
+# Table 2 (Momentum Shift) equivalents. Only MVRV_MOMENTUM needs these --
+# RSI_DIVERGENCE and MACD_SLOPE are static WEIGHT_MAP_MOMENTUM entries from
+# the moment the process starts (real pattern-match status shown regardless,
+# same as any other weighted indicator), so they never hit either dict
+# below; kept out entirely rather than added as dead-code entries.
+DISPLAYABLE_BUT_UNWEIGHTED_MOMENTUM = {"MVRV_MOMENTUM"}
+
+NO_SIGNAL_STATUS_MOMENTUM = {
+    "MVRV_MOMENTUM": ("BUILDING HISTORY", "st-mid"),
+}
+
+EXCLUSION_REASONS_MOMENTUM = {
+    "MVRV_MOMENTUM": "Own trailing 365-day moving average needs a full year of accumulated MVRV Z-Score history before it's a meaningful comparison — joins WEIGHT_MAP_MOMENTUM at weight 1.5 once n>=365",
 }
 
 
@@ -2765,6 +2921,112 @@ def build_divergence_card_html(result):
     )
 
 
+# ---------------------------------------------------------------------------
+# TABLE 2 (Momentum Shift) — pattern-detection machinery for RSI Divergence
+# and MACD Histogram Slope. Both are threshold-free "detected / not
+# detected" pattern matches (a shape check, not a level comparison), the
+# same category of problem the MVRV-Z/price divergence card above already
+# solved once -- modeled directly on that same detect_*() /
+# _find_local_price_minima() shape rather than reinventing it.
+# ---------------------------------------------------------------------------
+RSI_DIVERGENCE_LOOKBACK_DAYS = 180
+RSI_DIVERGENCE_SWING_WINDOW = 14
+RSI_DIVERGENCE_DATE_TOLERANCE_DAYS = 3
+
+
+def _find_local_price_maxima(dated_price_history, lookback_days, swing_window):
+    """Mirror image of _find_local_price_minima() above -- same trailing-
+    window/swing-window pivot detection and same adjacent-peak collapse
+    logic, just keeping the higher of two nearby maxima instead of the
+    lower of two nearby minima. A price swing HIGH is what a bearish RSI
+    divergence needs to compare against (RSI Divergence looks for price
+    making a HIGHER high while RSI makes a LOWER high), the opposite
+    pairing from the bottom-table card's swing LOWS."""
+    if not dated_price_history:
+        return []
+    series = sorted(dated_price_history, key=lambda t: t[0])
+    cutoff = series[-1][0] - timedelta(days=lookback_days)
+    window = [(d, p) for d, p in series if d >= cutoff]
+    raw_maxima = []
+    for i in range(swing_window, len(window) - swing_window):
+        d, p = window[i]
+        sub_prices = [pp for _, pp in window[i - swing_window: i + swing_window + 1]]
+        if p == max(sub_prices):
+            raw_maxima.append((d, p))
+    maxima = []
+    for d, p in raw_maxima:
+        if maxima and (d - maxima[-1][0]).days <= swing_window:
+            if p > maxima[-1][1]:
+                maxima[-1] = (d, p)
+        else:
+            maxima.append((d, p))
+    return maxima
+
+
+def detect_rsi_divergence(cache, dated_price_history,
+                           lookback_days=RSI_DIVERGENCE_LOOKBACK_DAYS,
+                           swing_window=RSI_DIVERGENCE_SWING_WINDOW):
+    """Bearish RSI divergence: price makes a higher high while weekly RSI
+    makes a lower high -- momentum deceleration while price is STILL
+    RISING, exactly Table 2's job. Returns a dict shaped like
+    detect_mvrv_price_divergence() above -- always "available" (bool);
+    when True, also "detected" (bool) and "point1"/"point2" (each (date,
+    price, rsi)); when False, "reason" (str) plus whatever points WERE
+    identifiable, so the row can show real accumulation progress instead
+    of a bare N/A."""
+    maxima = _find_local_price_maxima(dated_price_history, lookback_days, swing_window)
+    if len(maxima) < 2:
+        return {
+            "available": False,
+            "reason": f"only {len(maxima)} local price maxima identified in the trailing "
+                      f"{lookback_days}d (need 2) — {'not enough price history yet' if not dated_price_history else 'market has not made a clear swing high pattern yet'}",
+            "point1": None, "point2": None,
+        }
+    first_max, second_max = maxima[-2], maxima[-1]
+
+    rsi_hist = cache.get("RSI__history", {})
+    rsi_dates, rsi_values = rsi_hist.get("dates", []), rsi_hist.get("values", [])
+    r1 = _nearest_dated_history_value(rsi_dates, rsi_values, first_max[0], RSI_DIVERGENCE_DATE_TOLERANCE_DAYS)
+    r2 = _nearest_dated_history_value(rsi_dates, rsi_values, second_max[0], RSI_DIVERGENCE_DATE_TOLERANCE_DAYS)
+    point1 = (first_max[0], first_max[1], r1)
+    point2 = (second_max[0], second_max[1], r2)
+
+    if r1 is None or r2 is None:
+        return {
+            "available": False,
+            "reason": f"Weekly RSI's own dated history is too sparse to match against these two price "
+                      f"maxima ({len(rsi_dates)}d of dated RSI history available; need a point within "
+                      f"{RSI_DIVERGENCE_DATE_TOLERANCE_DAYS}d of both {first_max[0]} and {second_max[0]})",
+            "point1": point1, "point2": point2,
+        }
+
+    detected = second_max[1] > first_max[1] and r2 < r1
+    return {"available": True, "detected": detected, "point1": point1, "point2": point2}
+
+
+def detect_macd_histogram_fade(price_history, bars=MACD_FADE_BARS):
+    """"Two-Bar Fade": weekly MACD histogram still positive across the full
+    trailing `bars` window, but strictly decreasing bar-over-bar within it
+    -- a fading bullish push, not yet a bearish cross. Returns a dict
+    shaped like detect_rsi_divergence() above ("available"/"detected"/
+    "reason"/"series") for the same honest-accumulation-progress reason.
+    Reuses compute_weekly_macd_histogram_series() -- same price_history
+    Table 1's own MACD already computed from, zero new fetch."""
+    series = compute_weekly_macd_histogram_series(price_history, lookback=bars)
+    if series is None or len(series) < bars:
+        got = 0 if series is None else len(series)
+        return {
+            "available": False,
+            "reason": f"only {got} weekly MACD histogram points available (need {bars} weekly closes "
+                      f"of MACD/signal-line history)",
+            "series": series,
+        }
+    if not all(h > 0 for h in series):
+        return {"available": True, "detected": False, "series": series}
+    fading = all(series[i] < series[i - 1] for i in range(1, len(series)))
+    return {"available": True, "detected": fading, "series": series}
+
+
 # Ordinal ranking of build_verdict()'s five fixed VERDICT_HEADLINE strings,
 # used ONLY to compare tiers the verdict already decided -- not a new
 # pct threshold, just naming the ordering those five fixed categories
@@ -2958,6 +3220,244 @@ def build_verdict_top(values):
         "VERDICT_TOP_LIST_TOP": ", ".join(top_names) if top_names else "none this run",
         "VERDICT_EXCLUDED_COUNT_TOP": len(excluded_names),
         "VERDICT_EXCLUDED_LIST_TOP": ", ".join(excluded_names) if excluded_names else "none",
+    }
+
+
+# ---------------------------------------------------------------------------
+# TABLE 2 — Momentum Shift Rank & Weight. A third, genuinely separate weight
+# pool from both WEIGHT_MAP and WEIGHT_MAP_TOP -- structurally identical
+# build/pie/summary/verdict machinery to Table 3's own (same shape,
+# deliberately not reused directly: each table needs to independently read
+# its own weight pool and its own "_MOM"-suffixed values keys, exactly the
+# reason Table 3's functions weren't reused for Table 1 either). No Power
+# Law veto row (no published analog) and no consecutive-buy-days annotation
+# (a top-7-by-weight feature; Table 2 only ever has 3 tracked indicators).
+# ---------------------------------------------------------------------------
+
+# Same reuse-the-css-class, relabel-the-text convention as Table 3's own
+# _TOP_STATUS_TEXT -- status_pill()'s tier logic is direction-agnostic, only
+# the label wording changes per table. Only MVRV_MOMENTUM ever produces
+# st-strong-buy/st-near (it's the only Table 2 token routed through
+# status_pill() itself); RSI_DIVERGENCE/MACD_SLOPE set st-buy/st-no directly
+# from their own detected/not-detected pattern match, so they only ever
+# land on the st-buy row of this mapping.
+_MOM_STATUS_TEXT = {
+    "st-strong-buy": "STRONG MOMENTUM SHIFT",
+    "st-buy": "MOMENTUM SHIFT DETECTED",
+    "st-near": "APPROACHING SHIFT",
+}
+
+
+def build_full_weighted_breakdown_momentum(values, cache):
+    """Table 2's own master table -- structurally identical to
+    build_full_weighted_breakdown_top() (same per-row assembly, same kind
+    of Python dicts, same real-st-mid-label-passes-through-verbatim
+    exception for a token's own "BUILDING HISTORY"/insufficient-data text),
+    with its own rank order (get_master_rank_order_momentum()) and weight
+    pool (WEIGHT_MAP_MOMENTUM)."""
+    rows = []
+    for i, token in enumerate(get_master_rank_order_momentum(), start=1):
+        name = DISPLAY_NAMES.get(token, token)
+        target = values.get(f"{token}_MOM_TARGET", "—")
+        formatter = READING_FORMATTERS.get(token)
+        if formatter:
+            reading_val = formatter(values)
+        else:
+            reading_val = values.get(token)
+            reading_val = "—" if reading_val is None else reading_val
+
+        caveat = NAME_CAVEAT.get(token, "")
+        caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
+        tooltip_text = TOOLTIP_TEXT.get(token, "")
+        tooltip_html = (
+            f' <span class="tip-wrap"><span class="tip-icon" tabindex="0">i</span>'
+            f'<span class="tip-content">{tooltip_text}</span></span>'
+        ) if tooltip_text else ""
+        is_weighted = token in WEIGHT_MAP_MOMENTUM
+        anchor_html = ' <span class="anchor-icon">⚓</span>' if is_weighted else ""
+        name_cell = f"{name}{caveat_html}{tooltip_html}{anchor_html}"
+
+        src_url, src_label = SOURCE_URL.get(token, (None, "—"))
+        source_html = f'<a href="{src_url}" target="_blank">{src_label}</a>' if src_url else src_label
+
+        show_real_status = is_weighted or token in DISPLAYABLE_BUT_UNWEIGHTED_MOMENTUM
+        if show_real_status:
+            css = values.get(f"{token}_MOM_STATUS_CLASS")
+            label = values.get(f"{token}_MOM_STATUS_LABEL", "CHECK")
+            if css in _MOM_STATUS_TEXT:
+                status_text, status_css = _MOM_STATUS_TEXT[css], css
+            elif css == "st-no":
+                status_text, status_css = label, "st-no"
+            elif css == "st-mid" and label and label != "CHECK":
+                # Real, non-generic st-mid state (e.g. "BUILDING HISTORY",
+                # or a pattern detector's own "insufficient swing data"
+                # text) reaches the page as-is, same discipline as the
+                # NVT_GC/PI_CYCLE_TOP exception on Tables 1/3.
+                status_text, status_css = label, "st-mid"
+            else:
+                status_text, status_css = "NO READING TODAY", "st-mid"
+        elif token in EXCLUSION_REASONS_MOMENTUM:
+            status_text, status_css = "NOT YET SCORED", "st-mid"
+        else:
+            status_text, status_css = "NOT SCORED", "st-mid"
+
+        if is_weighted:
+            weight = WEIGHT_MAP_MOMENTUM[token]
+            pct_of_total = round((weight / sum(WEIGHT_MAP_MOMENTUM.values())) * 100, 1)
+            weight_display = f"{pct_of_total}%"
+            rows.append(
+                f'<tr><td class="rank-num">{i}</td><td class="ind-name">{name_cell}</td>'
+                f'<td class="reading">{reading_val}</td>'
+                f'<td class="reading">{weight_display}</td>'
+                f'<td class="target">{target}</td>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span></td>'
+                f'<td class="ind-source">{source_html}</td></tr>'
+            )
+        else:
+            reason = EXCLUSION_REASONS_MOMENTUM.get(token, "Not currently scored")
+            rows.append(
+                f'<tr class="rank-na"><td class="rank-num">{i}</td>'
+                f'<td class="ind-name">{name_cell}<div class="na-reason">{reason}</div></td>'
+                f'<td class="reading">{reading_val}</td>'
+                f'<td class="reading">N/A</td>'
+                f'<td class="target">{target}</td>'
+                f'<td><span class="status-pill {status_css}">{status_text}</span></td>'
+                f'<td class="ind-source">{source_html}</td></tr>'
+            )
+    return "\n".join(rows)
+
+
+def build_weight_pie_svg_momentum(values):
+    """Table 2's own pie chart -- same slice-boundary math as
+    build_weight_pie_svg()/build_weight_pie_svg_top() above, reading
+    WEIGHT_MAP_MOMENTUM and the "_MOM_STATUS_CLASS"-suffixed values
+    instead. Handles the zero-weight case defensively like Table 3's own
+    (not currently reachable -- RSI_DIVERGENCE+MACD_SLOPE are always
+    statically weighted -- but free, and matches the established pattern)."""
+    slices = [(DISPLAY_NAMES.get(t, t), w, values.get(f"{t}_MOM_STATUS_CLASS", "st-mid"))
+              for t, w in WEIGHT_MAP_MOMENTUM.items()]
+    total = sum(w for _, w, _ in slices)
+    if not total:
+        return ('<svg viewBox="0 0 300 300" width="260" height="260">'
+                '<circle cx="150" cy="150" r="120" fill="#3a4150"/>'
+                '<text x="150" y="150" text-anchor="middle" dominant-baseline="middle" '
+                'fill="white" font-size="16">No weighted indicators yet</text></svg>')
+    cx, cy, r = 150, 150, 120
+    fired_count = sum(1 for _, _, css in slices if css in ("st-strong-buy", "st-buy", "st-near"))
+
+    paths = []
+    cum_weight = 0.0
+    angle = 0.0
+    for label, weight, css in slices:
+        cum_weight += weight
+        start = angle
+        end = (cum_weight / total) * 360
+        angle = end
+        large_arc = 1 if (end - start) > 180 else 0
+        sx = cx + r * math.sin(math.radians(start)); sy = cy - r * math.cos(math.radians(start))
+        ex = cx + r * math.sin(math.radians(end)); ey = cy - r * math.cos(math.radians(end))
+        color = PIE_COLOR_MAP.get(css, PIE_GREY)
+        frac = weight / total
+        paths.append(
+            f'<path d="M{cx},{cy} L{sx:.2f},{sy:.2f} A{r},{r} 0 {large_arc},1 {ex:.2f},{ey:.2f} Z" '
+            f'fill="{color}"><title>{label}: {round(frac * 100, 1)}%</title></path>'
+        )
+    center_text = (
+        f'<text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="middle" '
+        f'fill="white" font-size="20">{fired_count}/{len(slices)} fired</text>'
+    )
+    return f'<svg viewBox="0 0 300 300" width="260" height="260">{"".join(paths)}{center_text}</svg>'
+
+
+def _count_bucket_momentum(values, tokens):
+    """Table 2 equivalent of _count_bucket()/_count_bucket_top() -- reads
+    WEIGHT_MAP_MOMENTUM and "_MOM_STATUS_CLASS" instead."""
+    scored = [t for t in tokens if t in WEIGHT_MAP_MOMENTUM]
+    buy = [t for t in scored if values.get(f"{t}_MOM_STATUS_CLASS") in ("st-strong-buy", "st-buy", "st-near")]
+    n_scored = len(scored)
+    n_buy = len(buy)
+    pct = round((n_buy / n_scored) * 100, 1) if n_scored else 0.0
+    return n_buy, n_scored, pct
+
+
+def build_signal_summary_html_momentum(values):
+    """Table 2's own summary box -- same proportionate shape as Table 3's
+    (build_signal_summary_html_top()): one fraction (all weighted
+    indicators) plus the main weighted percentage, via the shared
+    _render_summary_box() helper. Table 2 has only 3 tracked indicators
+    total, even less basis for a Core/Self-computed-style split than
+    Table 3's ~10 had."""
+    all_buy, all_total, all_pct = _count_bucket_momentum(values, tuple(WEIGHT_MAP_MOMENTUM.keys()))
+    weighted_pct = values.get("VERDICT_PCT_MOM")
+    weighted_pct_display = f"{weighted_pct}%" if weighted_pct is not None else "—"
+
+    cells = [(f"{all_buy}/{all_total}", "All weighted indicators signaling a momentum shift", all_pct)]
+    return _render_summary_box(cells, weighted_pct_display, "⚡ Actual weighted percentage ⚡")
+
+
+def build_verdict_momentum(values):
+    """Table 2's own verdict -- same mechanical weighted-tally structure as
+    build_verdict()/build_verdict_top() above, reading WEIGHT_MAP_MOMENTUM
+    and "_MOM_STATUS_CLASS" instead. Copy is reframed for momentum
+    deceleration during a still-bullish leg -- deliberately NOT "top" or
+    "bottom" language, since firing here is a leading warning that
+    momentum is fading, not a claim that either phase has actually
+    turned."""
+    scored, excluded_names, shift_names = [], [], []
+    for token, weight in WEIGHT_MAP_MOMENTUM.items():
+        css = values.get(f"{token}_MOM_STATUS_CLASS")
+        name = DISPLAY_NAMES.get(token, token)
+        if css in ("st-strong-buy", "st-buy"):
+            scored.append((token, weight, True))
+            shift_names.append(name)
+        elif css == "st-near":
+            scored.append((token, weight, True))
+            shift_names.append(f"{name} (approaching)")
+        elif css == "st-no":
+            scored.append((token, weight, False))
+        else:
+            excluded_names.append(name)
+
+    total_weight = sum(w for _, w, _ in scored)
+    shift_weight = sum(w for _, w, shift in scored if shift)
+    pct = round((shift_weight / total_weight) * 100, 1) if total_weight else None
+    shift_count = sum(1 for _, _, shift in scored if shift)
+    total_count = len(scored)
+
+    if pct is None:
+        headline = "Insufficient data this run"
+        body = ("Not enough Table 2 indicators returned a usable reading to synthesize a momentum-shift "
+                "verdict this run — check the Action log for what failed.")
+    elif pct < 25:
+        headline = "Minimal momentum-shift confluence"
+        body = ("Few of the weighted indicators are currently flashing deceleration. The underlying trend's "
+                "momentum looks intact for now — this is a leading/early-warning board, so a low reading here "
+                "is the expected default state, not a gap in coverage.")
+    elif pct < 50:
+        headline = "Partial momentum-shift confluence — early deceleration signs"
+        body = ("A meaningful minority of indicators are showing the underlying trend losing steam even while "
+                "price itself may still be rising. Historically this kind of early divergence has shown up "
+                "weeks to months before either a confirmed top (Table 3) or a real trend break — a heads-up, "
+                "not a call.")
+    elif pct < 75:
+        headline = "Strong momentum-shift confluence forming"
+        body = ("A majority of tracked momentum indicators are aligned toward deceleration. Worth real "
+                "attention, but this board has no veto power and no published track record of its own yet — "
+                "it's a leading signal about the CURRENT leg's momentum, not a top or bottom call.")
+    else:
+        headline = "Near-maximal momentum-shift confluence"
+        body = ("Nearly every tracked momentum indicator is aligned toward deceleration — the strongest "
+                "reading this board produces. Still not a top or bottom call by itself: it says the current "
+                "bullish push is fading, not that a reversal has been confirmed.")
+
+    return {
+        "VERDICT_PCT_MOM": pct if pct is not None else "—",
+        "VERDICT_COUNT_MOM": f"{shift_count}/{total_count}",
+        "VERDICT_HEADLINE_MOM": headline,
+        "VERDICT_BODY_MOM": body,
+        "VERDICT_SHIFT_LIST_MOM": ", ".join(shift_names) if shift_names else "none this run",
+        "VERDICT_EXCLUDED_COUNT_MOM": len(excluded_names),
+        "VERDICT_EXCLUDED_LIST_MOM": ", ".join(excluded_names) if excluded_names else "none",
     }
 
 
@@ -3417,6 +3917,88 @@ def main():
     print(f"  Divergence: {'available, ' + ('DETECTED' if divergence_result.get('divergence') else 'no divergence') if divergence_result['available'] else 'N/A — ' + divergence_result['reason']}")
 
     values["DISCUSSION_EXTENDED_HTML"] = build_discussion_extended_html(verdict, tranche_data, divergence_result)
+
+    # -----------------------------------------------------------------
+    # TABLE 2 — Momentum Shift Rank & Weight. Genuinely separate weight
+    # pool (WEIGHT_MAP_MOMENTUM) from both Table 1 and Table 3 -- catches
+    # deceleration DURING the bullish leg (a leading signal), before either
+    # a bottom-confirmation (Table 1) or top-confirmation (Table 3) signal
+    # has any reason to fire. Zero new data: RSI Divergence and MVRV
+    # Momentum reuse the exact same dated history caches ("RSI__history",
+    # "MVRV_Z__history") Table 1/3 already populate every run; MACD
+    # Histogram Slope reuses the exact same price_history already fetched
+    # for Table 1's own weekly MACD. See the Phase 1 redundancy-check notes
+    # (commit message) for why none of the three double-count an existing
+    # Table 1/3 claim.
+    # -----------------------------------------------------------------
+    print("Computing Table 2 (Momentum Shift) indicators...")
+
+    print("  Checking RSI bearish divergence (price higher high / RSI lower high)...")
+    rsi_div_result = detect_rsi_divergence(cache, price_history_dated)
+    if rsi_div_result["available"]:
+        p1, p2 = rsi_div_result["point1"], rsi_div_result["point2"]
+        values["RSI_DIVERGENCE"] = (
+            f"{p1[0].isoformat()} ${p1[1]:,.0f}/RSI {p1[2]:.1f} → "
+            f"{p2[0].isoformat()} ${p2[1]:,.0f}/RSI {p2[2]:.1f}"
+        )
+        if rsi_div_result["detected"]:
+            values["RSI_DIVERGENCE_MOM_STATUS_LABEL"] = "BEARISH DIVERGENCE"
+            values["RSI_DIVERGENCE_MOM_STATUS_CLASS"] = "st-buy"
+        else:
+            values["RSI_DIVERGENCE_MOM_STATUS_LABEL"] = "NO DIVERGENCE"
+            values["RSI_DIVERGENCE_MOM_STATUS_CLASS"] = "st-no"
+    else:
+        values["RSI_DIVERGENCE"] = rsi_div_result["reason"]
+        values["RSI_DIVERGENCE_MOM_STATUS_LABEL"] = "BUILDING HISTORY"
+        values["RSI_DIVERGENCE_MOM_STATUS_CLASS"] = "st-mid"
+    values["RSI_DIVERGENCE_MOM_TARGET"] = target_for_momentum("RSI_DIVERGENCE")
+    print(f"    RSI Divergence: {values['RSI_DIVERGENCE_MOM_STATUS_LABEL']}")
+
+    print("  Checking MACD histogram slope (Two-Bar Fade: still positive, shrinking)...")
+    macd_fade_result = detect_macd_histogram_fade(price_history)
+    if macd_fade_result["available"]:
+        values["MACD_SLOPE"] = " → ".join(f"{h:.2f}" for h in macd_fade_result["series"])
+        if macd_fade_result["detected"]:
+            values["MACD_SLOPE_MOM_STATUS_LABEL"] = "TWO-BAR FADE"
+            values["MACD_SLOPE_MOM_STATUS_CLASS"] = "st-buy"
+        else:
+            values["MACD_SLOPE_MOM_STATUS_LABEL"] = "NO FADE"
+            values["MACD_SLOPE_MOM_STATUS_CLASS"] = "st-no"
+    else:
+        values["MACD_SLOPE"] = macd_fade_result["reason"]
+        values["MACD_SLOPE_MOM_STATUS_LABEL"] = "BUILDING HISTORY"
+        values["MACD_SLOPE_MOM_STATUS_CLASS"] = "st-mid"
+    values["MACD_SLOPE_MOM_TARGET"] = target_for_momentum("MACD_SLOPE")
+    print(f"    MACD Histogram Slope: {values['MACD_SLOPE_MOM_STATUS_LABEL']}")
+
+    print("  Checking MVRV Momentum (current Z-Score vs. own trailing 365d MA)...")
+    mvrv_mom_ma, mvrv_mom_n = get_mvrv_momentum_ma(cache)
+    mvrv_val_for_mom = values.get("MVRV_Z")
+    if mvrv_mom_ma is not None and mvrv_val_for_mom is not None:
+        label, css = status_pill(mvrv_val_for_mom, "low", mvrv_mom_ma, cache=cache, token="MVRV_Z")
+        values["MVRV_MOMENTUM"] = mvrv_val_for_mom
+        values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = label
+        values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = css
+        values["MVRV_MOMENTUM_MOM_TARGET"] = (
+            f"≤ {round(mvrv_mom_ma, 2)} (own trailing {MVRV_MOMENTUM_WINDOW_DAYS}d MA, live, n={mvrv_mom_n})"
+        )
+        WEIGHT_MAP_MOMENTUM["MVRV_MOMENTUM"] = 1.5  # Tier 3, same as Thermocap/NRPL's own bootstrap weight
+        print(f"    MVRV Momentum: Z={mvrv_val_for_mom} vs 365d MA={round(mvrv_mom_ma, 2)} (n={mvrv_mom_n}) -> {label}")
+    else:
+        values["MVRV_MOMENTUM"] = mvrv_val_for_mom
+        values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = "BUILDING HISTORY"
+        values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = "st-mid"
+        values["MVRV_MOMENTUM_MOM_TARGET"] = f"N/A — building history ({mvrv_mom_n}/{MVRV_MOMENTUM_MIN_DAYS} days)"
+        print(f"    MVRV Momentum: only {mvrv_mom_n}/{MVRV_MOMENTUM_MIN_DAYS} days of history accumulated, staying N/A")
+
+    print("Building Table 2 (Momentum Shift) verdict synthesis...")
+    values["FULL_WEIGHTED_BREAKDOWN_ROWS_MOM"] = build_full_weighted_breakdown_momentum(values, cache)
+    values["WEIGHT_PIE_SVG_MOM"] = build_weight_pie_svg_momentum(values)
+    values["TOTAL_TRACKED_COUNT_MOM"] = len(_ALL_TRACKED_TOKENS_MOMENTUM)
+    verdict_mom = build_verdict_momentum(values)
+    values.update(verdict_mom)
+    values["SIGNAL_SUMMARY_BOX_MOM"] = build_signal_summary_html_momentum(values)
+    print(f"  Table 2 Verdict: {verdict_mom['VERDICT_HEADLINE_MOM']} ({verdict_mom['VERDICT_PCT_MOM']}%, {verdict_mom['VERDICT_COUNT_MOM']} weighted-shift)")
 
     # -----------------------------------------------------------------
     # TABLE 3 — Cycle Top Rank & Weight. Phase 2: every indicator computes

@@ -307,7 +307,7 @@
   <div class="titleblock">
     <div class="eyebrow">Automated · Rebuilt Daily · Free-Data Only</div>
     <h1>₿TC Cycle Watch</h1>
-    <p class="abstract">A weighted synthesis of the most statistically defensible Bitcoin cycle indicators — <strong>ranked and scored by significance</strong>, fetched and computed automatically each day from free public data. Two genuinely separate weight pools, one per market phase: a Cycle Bottom board weighed underneath the one signal that actually decides anything, and a Cycle Top board tracking the opposite extreme independently.</p>
+    <p class="abstract">A weighted synthesis of the most statistically defensible Bitcoin cycle indicators — <strong>ranked and scored by significance</strong>, fetched and computed automatically each day from free public data. Three genuinely separate weight pools: a Cycle Bottom board weighed underneath the one signal that actually decides anything, a Momentum Shift board catching deceleration while a leg is still running, and a Cycle Top board tracking the opposite extreme independently.</p>
     <div class="updated-line">Last refreshed: {{LAST_UPDATED}}</div>
   </div>
 
@@ -361,13 +361,43 @@
     {{TRANCHE_STATUS_HTML}}
   </details>
 
+  <details class="section" open>
+    <summary class="section-head">
+      <div class="section-num">§3 · WEIGHTED SYNTHESIS — MOMENTUM</div>
+      <div class="section-title">Momentum Shift Rank &amp; Weight</div>
+      <div class="section-sub">A third, genuinely separate weight pool — leading deceleration signals that fire WHILE price is still rising, before either the Cycle Bottom or Cycle Top tables have any reason to. Catches the bullish leg losing steam early, not a top or bottom call by itself. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight. MVRV Momentum joins the pool once a full year of its own trailing-average history has accumulated.</div>
+    </summary>
+    {{SIGNAL_SUMMARY_BOX_MOM}}
+    <div class="pie-wrap" style="margin-top:24px;">
+      <div class="pie-caption">Each slice is an indicator's share of the momentum-shift weighted verdict — colored in if it's currently detected/fired, grey if not.</div>
+      {{WEIGHT_PIE_SVG_MOM}}
+    </div>
+    <div class="table-scroll"><table>
+      <thead><tr><th style="width:5%">#</th><th style="width:23%">Indicator</th><th style="width:12%">Reading</th><th style="width:9%">Weight</th><th style="width:19%">Target</th><th style="width:17%">Status Today</th><th style="width:15%">Source</th></tr></thead>
+      <tbody>
+        {{FULL_WEIGHTED_BREAKDOWN_ROWS_MOM}}
+      </tbody>
+    </table></div>
+    <div class="table-source-line">{{TOTAL_TRACKED_COUNT_MOM}} indicators tracked in total · weight % is share of the scoreable pool only, recalculated fresh each run</div>
+    <div class="discussion" style="margin-top:16px;">
+      <strong>Table 2 verdict:</strong> {{VERDICT_COUNT_MOM}} of today's scoreable momentum indicators are flashing deceleration ({{VERDICT_PCT_MOM}}% of scored weight) — {{VERDICT_HEADLINE_MOM}}
+      <br><br>
+      {{VERDICT_BODY_MOM}}
+      <br><br>
+      Flashing this run: {{VERDICT_SHIFT_LIST_MOM}}.
+      <div class="fine-print">
+        <strong>This is a mechanical tally, not financial advice or a price prediction.</strong> A leading/early-warning board with no veto power and, so far, no track record of its own — same caveats as the Cycle Bottom table above.
+      </div>
+    </div>
+  </details>
+
   <div class="phase-divider">
     <span class="phase-divider-label"><span class="phase-dot phase-dot-buy"></span> Bottom-side signals above · Top-side signals below <span class="phase-dot phase-dot-sell"></span></span>
   </div>
 
   <details class="section accent-sell" open>
     <summary class="section-head">
-      <div class="section-num">§3 · WEIGHTED SYNTHESIS — TOP</div>
+      <div class="section-num">§4 · WEIGHTED SYNTHESIS — TOP</div>
       <div class="section-title">Cycle Top Rank &amp; Weight</div>
       <div class="section-sub">Every tracked top-side indicator, ranked by actual current weight, heaviest first — a genuinely separate weight pool from the Cycle Bottom table above, sharing machinery (leeway/sigma system, rolling-percentile thresholds) but not a shared pool, so each table can independently report its own phase. No Power Law row here — Power Law has no published top-side analog. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight. MVRV Z-Score, Puell Multiple, and Thermocap Multiple join the pool once their own rolling-percentile threshold has enough history (90+ days); Pi Cycle Top is deliberately display-only, not yet weighted.</div>
     </summary>
@@ -397,7 +427,7 @@
 
   <details class="section" open>
     <summary class="section-head">
-      <div class="section-num">§4 · LIVE — POLYMARKET GAMMA API</div>
+      <div class="section-num">§5 · LIVE — POLYMARKET GAMMA API</div>
       <div class="section-title">Prediction Market</div>
       <div class="section-sub">Crowd probability, not a forecast — deliberately not scored in §1. Hover for the caveat.</div>
     </summary>
@@ -448,11 +478,11 @@
 
   <details class="section" open>
     <summary class="section-head">
-      <div class="section-num">§5 · DISCUSSION</div>
+      <div class="section-num">§6 · DISCUSSION</div>
       <div class="section-title">Discussion</div>
     </summary>
     <div class="discussion">
-      <strong>Where things stand (Cycle Bottom table):</strong> {{VERDICT_COUNT}} of today's scoreable indicators are buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong>Power Law has not confirmed</strong> — nothing above substitutes for that. (Cycle Top table's own verdict is discussed inline in §3 above, since it isn't yet weighted enough to warrant a second full discussion section.)
+      <strong>Where things stand (Cycle Bottom table):</strong> {{VERDICT_COUNT}} of today's scoreable indicators are buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong>Power Law has not confirmed</strong> — nothing above substitutes for that. (The Momentum Shift table's own verdict is discussed inline in §3 above, and the Cycle Top table's in §4, since neither is yet weighted enough to warrant a second full discussion section here.)
       <br><br>
       {{VERDICT_BODY}}
       <br><br>
