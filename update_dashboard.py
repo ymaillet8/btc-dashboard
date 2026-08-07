@@ -2452,7 +2452,7 @@ def _component_state(days):
     """Tri-state classification for one component's persistence day-count --
     'confirmed' (>=TRANCHE_PERSISTENCE_DAYS consecutive days), 'flashing'
     (1 to TRANCHE_PERSISTENCE_DAYS-1), or 'not-yet' (0). Shared by every
-    consumer of _compute_tranche_data() below (the detailed §5 panel AND
+    consumer of _compute_tranche_data() below (the detailed §2 panel AND
     the checklist widget) so they can never disagree about what state a
     given day-count represents."""
     if days >= TRANCHE_PERSISTENCE_DAYS:
@@ -2465,7 +2465,7 @@ def _component_state(days):
 def _compute_tranche_data(values, cache):
     """Single source of truth for every tranche component's persistence
     day-count -- computed once here, consumed by BOTH build_tranche_status()
-    (the detailed §5 panel) and build_tranche_checklist_html() (the compact
+    (the detailed §2 panel) and build_tranche_checklist_html() (the compact
     checklist widget), so the two displays are structurally incapable of
     drifting out of sync with each other; neither re-derives a day-count
     the other already computed.
@@ -2586,13 +2586,13 @@ _CHECKLIST_GLYPH = {"confirmed": "☑", "flashing": "◑", "not-yet": "☐"}
 def build_tranche_checklist_html(tranche_data):
     """Compact to-do-list-style widget for {{TRANCHE_CHECKLIST_HTML}} -- a
     3-second-glance view of the exact same tranche_data
-    _compute_tranche_data() produces for the fuller §5 panel (single source
+    _compute_tranche_data() produces for the fuller §2 panel (single source
     of truth, see that function's docstring; this never re-derives a
     day-count). Each component gets its own checkbox (checked/flashing/
     unchecked per _component_state()); each tranche's own parent checkbox
     is checked only when EVERY one of its components is individually
     checked -- derived here from the children's states, never a separate
-    stored flag. No explanatory copy -- that's what the §5 panel and README
+    stored flag. No explanatory copy -- that's what the §2 panel and README
     are for."""
     blocks = []
     for tranche in tranche_data:
@@ -2781,7 +2781,7 @@ _INDICATOR_TIER_RANK = {
 
 
 def build_discussion_extended_html(verdict, tranche_data, divergence_result):
-    """§4 Discussion synthesis -- layers the tranche picture and the
+    """§5 Discussion synthesis -- layers the tranche picture and the
     divergence picture on top of the indicator picture already summarized
     by `verdict` (build_verdict()'s return value), then one hedged
     synthesis paragraph combining all three. Deliberately reuses
@@ -2791,7 +2791,7 @@ def build_discussion_extended_html(verdict, tranche_data, divergence_result):
     detect_mvrv_price_divergence() (the same object
     build_divergence_card_html() consumes) -- both passed in by the
     caller rather than recomputed here, so this can never drift out of
-    sync with the §1 table, the §5 panel/checklist, or the divergence
+    sync with the §1 table, the §2 panel/checklist, or the divergence
     card. Introduces no new thresholds: the indicator tier below is just
     an ordinal ranking of build_verdict()'s own five fixed headline
     strings, and the tranche verdict comes straight from the shared
@@ -2823,8 +2823,7 @@ def build_discussion_extended_html(verdict, tranche_data, divergence_result):
     divergence_detected = divergence_available and bool(divergence_result.get("divergence"))
     if not divergence_available:
         divergence_para = (
-            f'<strong>3. Divergence picture:</strong> Not enough data to call yet — '
-            f'{divergence_result.get("reason", "insufficient price/Z-Score history")}.'
+            '<strong>3. Divergence picture:</strong> Not enough data yet to confirm this pattern.'
         )
     elif divergence_detected:
         divergence_para = (
@@ -2890,8 +2889,8 @@ def build_discussion_extended_html(verdict, tranche_data, divergence_result):
 
         if not divergence_available:
             synthesis += (
-                f" (The divergence read itself is unavailable this run — {divergence_result.get('reason', 'insufficient history')} "
-                "— so this leans more heavily on the indicator and tranche layers above.)"
+                " (Not enough data yet to confirm this pattern — so this leans more heavily on the "
+                "indicator and tranche layers above.)"
             )
 
     synthesis_para = f'<strong>4. Synthesis:</strong> {synthesis}'
