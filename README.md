@@ -183,3 +183,99 @@ if a new ATH prints — used for the Drawdown Magnitude row.
 
 Once Pages is live, send him the URL from step 6 — normal public webpage,
 no login, always shows the latest daily-refreshed numbers.
+
+## Adaptive Thresholds & Pattern Signals (v19)
+
+### Why MVRV Z-Score's fixed ≤0.0 threshold was replaced
+
+Bitcoin's cycle-bottom drawdowns have structurally compressed over time
+(peak-to-trough roughly -93% in 2011, down to -77% in 2015, -84% in 2018,
+and -54% overall by the 2022 low). A single fixed number picked from past
+cycles risks quietly becoming too easy — or too hard — to cross as that
+compression continues. Worse, there are only 3 real historical cycle
+bottoms (2015/2018/2022) to anchor a *new* fixed constant on — nowhere
+near enough data points to justify inventing one with any real confidence.
+
+So MVRV Z-Score now uses the same self-normalizing approach already built
+for Thermocap and NRPL: the 5th–10th percentile (7.5th, as the midpoint)
+of its own trailing 2-year (730-day) history, recomputed fresh every day
+from the same daily cache the dashboard already builds — zero extra API
+cost. `get_adaptive_mvrv_threshold()` in `update_dashboard.py` does this;
+the live target cell shows the actual number plus the percentile and
+window it came from ("≤ -0.15 (live, 7.5th pct. of trailing 400d, capped
+730d)"), never a bare, unexplained number.
+
+**Honest limitation, stated up front:** unlike Active Addresses Power-Law
+Deviation, there's no free unmetered bulk-history source for MVRV
+Z-Score — checked directly, no such file exists on BGeometrics' public
+chart infrastructure. So this has no bootstrap shortcut: it needs 365 real
+accumulated daily points (one per day this dashboard actually runs and
+gets a fresh MVRV_Z reading) before it activates. Until then, MVRV Z-Score
+stays on the original fixed ≤0.0 threshold — the exact same fallback
+behavior `get_effective_sigma()` already uses elsewhere on this page.
+Given the cache only started accumulating in August 2026, expect roughly a
+year before the adaptive threshold goes live.
+
+### Capital Deployment Tranches (§5)
+
+Three tranches, sequenced by the order these signal groups have
+historically turned in 2015/2018/2022 — not an arbitrary grouping:
+
+1. **Tranche 1 (~20-25% allocation) — Early Movers.** Reserve Risk and
+   LTH-SOPR, both long-term-holder-conviction signals, have tended to turn
+   favorable first, well before the eventual low.
+2. **Tranche 2 (~35-40% allocation) — Core Confirmers.** MVRV Z-Score
+   (using the adaptive threshold above) and Puell Multiple — the core
+   valuation-vs-issuance signals — have tended to confirm next.
+3. **Tranche 3 (remainder) — All Clear.** Hash Ribbons flipping from
+   CAPITULATION to its recovery/BUY SIGNAL state (30d hashrate MA crossing
+   back above 60d MA, confirmed by price momentum) has historically been
+   the last, most-confirming signal of the group.
+
+Each tranche fires only when **all** of its components are independently
+buy-favorable — this is a read-only, additive display feature: it never
+feeds `WEIGHT_MAP`, `get_master_rank_order()`, or the weighted verdict
+above it. It's a second lens on the same underlying indicators, not a
+second scoring system.
+
+### The 5-day persistence rule
+
+A tranche only shows CONFIRMED once every one of its components has held
+its buy-favorable status for 5 or more *consecutive calendar days* — not a
+single good print. This reuses `consecutive_buy_days()` (already built for
+Reserve Risk/LTH-SOPR's "X days" annotation) for the three numeric
+threshold-crossing components (Reserve Risk, LTH-SOPR, MVRV Z-Score,
+Puell), and a small parallel `state_streak()` helper for Hash Ribbons'
+categorical CAPITULATION/RECOVERING/BUY SIGNAL state, which isn't a number
+crossing a line so `consecutive_buy_days()` doesn't apply to it directly.
+A component favorable for fewer than 5 days shows as "🟡 flashing (day
+N/5)" rather than counting toward confirmation — the whole point is to
+filter out a one-day wobble, not to hide it.
+
+### MVRV-Z / Price Divergence detector (§6)
+
+Watches for the pattern that preceded the actual Nov 2022 bottom: price
+making a **lower low** while MVRV Z-Score simultaneously makes a **higher
+low** (-1.36 in Nov 2022 vs. -2.53 in June 2022) — a price washout not
+matched by an equally deep on-chain capitulation, a classic bullish
+divergence.
+
+`detect_mvrv_price_divergence()` identifies the two most recent local
+price minima over a trailing 180-day window (standard swing-low detection:
+a day counts as a local minimum only if it's the lowest price within
+±14 days on both sides), then looks up each minimum's date against MVRV
+Z-Score's own dated history. If the second, more recent minimum's price is
+lower but its Z-Score is higher, that's `DIVERGENCE DETECTED`.
+
+This is a **confirming/context signal only** — like the tranches above, it
+never joins `WEIGHT_MAP`, `_ALL_TRACKED_TOKENS`, or either pie chart. It
+lives in its own §6 Pattern Signals section, separate from both weighted
+verdict tables.
+
+**Honest limitation:** this needs real dated MVRV Z-Score history spanning
+however far back the two price minima it finds actually are — currently
+only a handful of days deep (same bootstrap gap as the adaptive threshold
+above), so this will realistically read N/A for months. It reports exactly
+why it's N/A (how many local minima it found, how sparse the matching
+Z-Score history is) rather than guessing at a result it can't actually
+support yet.

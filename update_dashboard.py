@@ -58,7 +58,7 @@ import math
 import os
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 
 # ---------------------------------------------------------------------------
 # Disclosed assumptions for the self-computed Production Cost estimate.
@@ -144,6 +144,20 @@ HISTORY_MAX_LEN = 200       # cap stored history length (keeps the cache file sm
 MIN_HISTORY_DAYS = 90       # minimum accumulated points before trusting a computed percentile
 PERCENTILE_CUTOFF = 10      # bottom 10th percentile of trailing history = buy-favorable
 
+# Per-key override for HISTORY_MAX_LEN, checked by history_append() below.
+# MVRV_Z needs its own longer cap: get_adaptive_mvrv_threshold() requires
+# 365 accumulated points before its bootstrap gate opens and reads a
+# 730-day trailing window once it has -- against the generic 200-point
+# cap, that gate could NEVER be satisfied (every history array would be
+# truncated to 200 long before reaching 365), a real bug caught by running
+# the walk-forward backtest before shipping this, not a hypothetical.
+# Every other indicator's cap is untouched at the generic 200 -- this is
+# scoped to MVRV_Z only, so nothing else's rolling-percentile window
+# changes. (730 hardcoded here, matching MVRV_ADAPTIVE_WINDOW_DAYS defined
+# further down -- can't reference that constant yet at this point in the
+# file, so keep the two in sync if either ever changes.)
+HISTORY_MAX_LEN_OVERRIDES = {"MVRV_Z": 730}
+
 
 def history_append(cache, key, value, date=None):
     """Append today's value to this token's rolling history, trimmed to
@@ -161,11 +175,22 @@ def history_append(cache, key, value, date=None):
     backtest_indicators.py's walk-forward loops, which call this many times
     within one real wall-clock run to simulate one call per past day)
     supply the simulated day explicitly, instead of every call collapsing
-    onto the real "today"."""
+    onto the real "today".
+
+    Also maintains a `dates` list parallel to `values` (same length, same
+    trim), so later consumers can tell which calendar day any given history
+    point belongs to -- needed by anything that has to line this
+    indicator's history up against another dated series (e.g. the MVRV-Z/
+    price divergence detector) rather than just feed it into a
+    position-agnostic percentile/stdev calculation. Entries appended before
+    this field existed won't have a matching date unless backfilled by
+    hand -- `dates` can be shorter than `values` in that case, so callers
+    must index from the end, never assume equal length going backward."""
     if value is None:
         return
     hist_key = f"{key}__history"
-    entry = cache.get(hist_key, {"values": [], "last_date": None})
+    entry = cache.get(hist_key, {"values": [], "dates": [], "last_date": None})
+    entry.setdefault("dates", [])
     try:
         fvalue = float(value)
     except (TypeError, ValueError):
@@ -173,10 +198,15 @@ def history_append(cache, key, value, date=None):
     day = date.isoformat() if date is not None else datetime.now(timezone.utc).date().isoformat()
     if entry.get("last_date") == day and entry["values"]:
         entry["values"][-1] = fvalue
+        if entry["dates"]:
+            entry["dates"][-1] = day
     else:
         entry["values"].append(fvalue)
+        entry["dates"].append(day)
         entry["last_date"] = day
-    entry["values"] = entry["values"][-HISTORY_MAX_LEN:]
+    max_len = HISTORY_MAX_LEN_OVERRIDES.get(key, HISTORY_MAX_LEN)
+    entry["values"] = entry["values"][-max_len:]
+    entry["dates"] = entry["dates"][-max_len:]
     cache[hist_key] = entry
 
 
@@ -208,6 +238,55 @@ def rolling_threshold(cache, key, percentile=PERCENTILE_CUTOFF):
     if n < MIN_HISTORY_DAYS:
         return None, n
     return compute_percentile(values, percentile), n
+
+
+# MVRV Z-Score's fixed ≤0.0 bottom threshold has the same problem the
+# rolling-percentile system above was built to solve for Thermocap/NRPL:
+# Bitcoin's structural volatility has compressed every cycle (peak-to-
+# trough drawdowns -93% in 2011 -> -77% in 2015 -> -84% in 2018 -> -77% in
+# 2022's first leg -> -54% overall by the 2022 low), and there are only 3
+# real historical cycle bottoms (2015/2018/2022) to anchor a new fixed
+# replacement number -- too few data points to justify inventing one, the
+# same reasoning that kept Thermocap/NRPL off a fixed constant. Adaptive
+# instead: bottom-tail percentile of MVRV_Z's own trailing history, same
+# cache/mechanism as rolling_threshold() above, just with its own longer
+# window (2 years, vs. the 200-point HISTORY_MAX_LEN cap other indicators
+# use) and its own longer bootstrap gate (365 days, not MIN_HISTORY_DAYS's
+# 90) -- a self-referential percentile computed from under a year of daily
+# points is too noisy to trust as a real "5-10th percentile of 2 years"
+# claim, so MVRV_Z falls back to the original fixed 0.0 threshold below
+# that, exactly like get_effective_sigma()'s own partial-sample handling.
+#
+# HONEST LIMITATION: unlike Active Addresses Power-Law Deviation (which
+# bootstraps instantly from BGeometrics' own unmetered full-history chart
+# JSON file), no equivalent unmetered bulk-history source exists for MVRV
+# Z-Score -- checked directly (charts.bgeometrics.com/files/mvrv_zscore*.
+# json and variants all 404; the chart page itself is JS-rendered, so no
+# static data reference could be found either). So this has no bootstrap
+# shortcut: starting from the ~4 days of history accumulated as of this
+# writing, it stays on the fixed 0.0 fallback for roughly the next year.
+# That's the bootstrap-safety design working as intended, not a bug.
+MVRV_ADAPTIVE_WINDOW_DAYS = 730     # trailing 2 years
+MVRV_ADAPTIVE_MIN_DAYS = 365        # 1 year minimum before trusting the percentile
+MVRV_ADAPTIVE_PERCENTILE = 7.5      # midpoint of the requested 5th-10th percentile range
+
+
+def get_adaptive_mvrv_threshold(cache, percentile=MVRV_ADAPTIVE_PERCENTILE,
+                                 window_days=MVRV_ADAPTIVE_WINDOW_DAYS):
+    """Returns (threshold, n_points): the `percentile`-th percentile of
+    MVRV_Z's own trailing `window_days` of history, or (None, n_points) if
+    fewer than MVRV_ADAPTIVE_MIN_DAYS points have accumulated yet -- same
+    bootstrap-safety shape as rolling_threshold()/get_effective_sigma(), so
+    callers can show honest accumulation progress ("N/365 days") instead of
+    a fabricated early threshold. Reads the same MVRV_Z__history cache the
+    generic BG_METRICS loop already populates every run -- zero extra API
+    cost, identical in spirit to the Thermocap/NRPL rolling-percentile
+    system, just its own window/gate per the reasoning above."""
+    values = cache.get("MVRV_Z__history", {}).get("values", [])
+    n = len(values)
+    if n < MVRV_ADAPTIVE_MIN_DAYS:
+        return None, n
+    return compute_percentile(values[-window_days:], percentile), n
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +404,33 @@ def consecutive_buy_days(cache, token, direction, threshold):
             break
         count += 1
     return count
+
+
+def state_streak(cache, key, target_state, current_state, date=None):
+    """Consecutive-calendar-day counter for a CATEGORICAL state (e.g. Hash
+    Ribbons' CAPITULATION/RECOVERING/BUY SIGNAL), for indicators
+    consecutive_buy_days() can't handle -- that function compares numeric
+    history against a threshold, but Miner Capitulation's state isn't a
+    number crossing a line, it's a label. Stores {"count": N, "last_date":
+    ...} under f"{key}__streak" in cache, incrementing once per new
+    calendar day `current_state == target_state` holds, resetting to 0
+    otherwise -- same same-day-guard shape as history_append() (a same-day
+    rerun doesn't double-count), and the same `date` override for
+    backtest_indicators.py's simulated-day replay. Returns the count AFTER
+    this call's update."""
+    stream_key = f"{key}__streak"
+    entry = cache.get(stream_key, {"count": 0, "last_date": None})
+    day = date.isoformat() if date is not None else datetime.now(timezone.utc).date().isoformat()
+    if entry.get("last_date") == day:
+        pass  # same-day rerun: leave the count as whatever it already is today
+    elif current_state == target_state:
+        entry["count"] = entry.get("count", 0) + 1
+        entry["last_date"] = day
+    else:
+        entry["count"] = 0
+        entry["last_date"] = day
+    cache[stream_key] = entry
+    return entry["count"]
 
 # token -> (endpoint slug [best guess, unverified], direction, threshold)
 BG_METRICS = {
@@ -666,11 +772,20 @@ def seed_active_addr_dev_history(cache, points, slope, intercept):
 # 2. CoinGecko — Mayer Multiple + Drawdown magnitude
 # ---------------------------------------------------------------------------
 def fetch_coingecko_history(days=210):
+    """Returns [(date, price), ...] ascending -- dated, unlike the bare
+    float list this used to return. Callers that only need the values
+    (Mayer/Drawdown/RSI/MACD/Bollinger/NVT/Miner-Cap -- none of which care
+    which calendar day a given price belongs to) strip the date with
+    `[p for _, p in dated]`. Kept dated at the source instead of adding a
+    second fetch, since the MVRV-Z/price divergence detector needs real
+    dates to line price local-minima up against MVRV_Z's own dated history
+    -- this is the same CoinGecko response, same one API call, just no
+    longer throwing the timestamp half away."""
     url = f"https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days={days}&interval=daily"
     try:
         data = _get_json(url)
         prices = data.get("prices", [])  # [[ms_timestamp, price], ...]
-        return [p[1] for p in prices if p[1]]
+        return [(datetime.fromtimestamp(p[0] / 1000, tz=timezone.utc).date(), p[1]) for p in prices if p[1]]
     except Exception as e:
         print(f"  ! coingecko history failed: {e}")
         return []
@@ -2312,6 +2427,266 @@ def build_verdict(values):
     }
 
 
+# ---------------------------------------------------------------------------
+# Capital Deployment Tranches -- a read-only, additive display feature. Does
+# NOT feed WEIGHT_MAP, get_master_rank_order(), or the weighted verdict
+# above; purely a second lens on the same underlying indicators, sequenced
+# by the observed 2015/2018/2022 firing order: Reserve Risk and LTH-SOPR
+# (long-term-holder-conviction signals) tend to turn first, MVRV Z-Score and
+# Puell (core valuation-vs-issuance signals) confirm next, and Hash Ribbons'
+# recovery (miners capitulating, then turning back up) has historically
+# been the last, most-confirming signal of the group -- hence "early
+# movers" -> "core confirmers" -> "all clear."
+#
+# PERSISTENCE: a single favorable day is noise as often as it's signal --
+# requiring 5 consecutive calendar days before a component counts toward
+# CONFIRMED avoids flagging a tranche live on a one-day wobble. Reuses
+# consecutive_buy_days() (already built for Reserve Risk/LTH-SOPR's "X
+# days" annotation) for the three numeric threshold-crossing components;
+# Hash Ribbons' categorical state needs state_streak() instead (see its own
+# docstring for why consecutive_buy_days() doesn't apply there).
+TRANCHE_PERSISTENCE_DAYS = 5
+
+
+def _tranche_numeric_component(cache, values, token, direction, threshold):
+    """(days, label_html) for one numeric threshold-crossing component of a
+    tranche. days=0 if not currently favorable at all, else however many
+    consecutive most-recent days it's held (from consecutive_buy_days(),
+    uncapped -- the caller compares against TRANCHE_PERSISTENCE_DAYS)."""
+    name = DISPLAY_NAMES.get(token, token)
+    if threshold is None:
+        return 0, f"{name} — no threshold available"
+    days = consecutive_buy_days(cache, token, direction, threshold) or 0
+    if days >= TRANCHE_PERSISTENCE_DAYS:
+        return days, f"{name} ✓"
+    if days >= 1:
+        return days, f"{name} \U0001f7e1 flashing (day {days}/{TRANCHE_PERSISTENCE_DAYS})"
+    return days, f"{name} not yet"
+
+
+def _tranche_verdict(component_days):
+    """Given each component's day-count, the tranche-level status: CONFIRMED
+    only when every component has independently held for
+    TRANCHE_PERSISTENCE_DAYS+ days; PARTIAL when at least one component is
+    favorable today (persisted or still flashing) but not all of them are
+    confirmed; NOT YET when nothing is firing at all."""
+    confirmed = sum(1 for d in component_days if d >= TRANCHE_PERSISTENCE_DAYS)
+    firing = sum(1 for d in component_days if d >= 1)
+    if confirmed == len(component_days) and confirmed > 0:
+        return "✅ CONFIRMED", "tranche-confirmed"
+    if firing >= 1:
+        return "⚠️ PARTIAL", "tranche-partial"
+    return "⛔ NOT YET", "tranche-not-yet"
+
+
+def build_tranche_status(values, cache):
+    """Returns ready-to-insert HTML for {{TRANCHE_STATUS_HTML}} -- three
+    rows, cheat-sheet style, each showing the tranche verdict plus which
+    component(s) are firing. See the module comment above for the
+    early-movers/core-confirmers/all-clear rationale and the persistence
+    rule."""
+    rows = []
+
+    # Tranche 1 — Early Movers: Reserve Risk + LTH-SOPR, both already
+    # numeric threshold-crossing indicators in BG_METRICS.
+    rr_dir, rr_thr = BG_METRICS["RESERVE_RISK"][1], BG_METRICS["RESERVE_RISK"][2]
+    lth_dir, lth_thr = BG_METRICS["LTH_SOPR"][1], BG_METRICS["LTH_SOPR"][2]
+    rr_days, rr_label = _tranche_numeric_component(cache, values, "RESERVE_RISK", rr_dir, rr_thr)
+    lth_days, lth_label = _tranche_numeric_component(cache, values, "LTH_SOPR", lth_dir, lth_thr)
+    t1_verdict, t1_css = _tranche_verdict([rr_days, lth_days])
+    rows.append((
+        "Tranche 1 (~20-25% allocation) — Early Movers",
+        t1_verdict, t1_css, f"{rr_label}, {lth_label}",
+    ))
+
+    # Tranche 2 — Core Confirmers: MVRV Z-Score (adaptive threshold if it's
+    # live yet, else the same fixed 0.0 fallback the rest of the page is
+    # using today — always the SAME threshold actually in effect, not a
+    # second, disconnected copy of the logic) + Puell Multiple.
+    mvrv_thr, _mvrv_n = get_adaptive_mvrv_threshold(cache)
+    if mvrv_thr is None:
+        mvrv_thr = BG_METRICS["MVRV_Z"][2]
+    puell_dir, puell_thr = BG_METRICS["PUELL"][1], BG_METRICS["PUELL"][2]
+    mvrv_days, mvrv_label = _tranche_numeric_component(cache, values, "MVRV_Z", "low", mvrv_thr)
+    puell_days, puell_label = _tranche_numeric_component(cache, values, "PUELL", puell_dir, puell_thr)
+    t2_verdict, t2_css = _tranche_verdict([mvrv_days, puell_days])
+    rows.append((
+        "Tranche 2 (~35-40% allocation) — Core Confirmers",
+        t2_verdict, t2_css, f"{mvrv_label}, {puell_label}",
+    ))
+
+    # Tranche 3 — All Clear: Hash Ribbons flipping from CAPITULATION to its
+    # recovery/BUY SIGNAL state. Categorical, not threshold-based, so this
+    # reads the day-streak state_streak() already maintained in main() (via
+    # cache["MINER_CAP__streak"]) rather than consecutive_buy_days().
+    mc_state = values.get("MINER_CAP_STATE", "CHECK")
+    mc_days = cache.get("MINER_CAP__streak", {}).get("count", 0)
+    if mc_days >= TRANCHE_PERSISTENCE_DAYS:
+        mc_label = f"Hash Ribbons ✓ BUY SIGNAL confirmed ({mc_days}d)"
+    elif mc_days >= 1:
+        mc_label = f"Hash Ribbons \U0001f7e1 flashing (day {mc_days}/{TRANCHE_PERSISTENCE_DAYS})"
+    else:
+        mc_label = f"Hash Ribbons: {mc_state.lower()}"
+    t3_verdict, t3_css = _tranche_verdict([mc_days])
+    rows.append((
+        "Tranche 3 (remainder) — All Clear",
+        t3_verdict, t3_css, mc_label,
+    ))
+
+    row_html = "\n".join(
+        f'<div class="tranche-row {css}"><div class="tranche-name">{name}</div>'
+        f'<div class="tranche-verdict">{verdict}</div>'
+        f'<div class="tranche-components">{components}</div></div>'
+        for name, verdict, css, components in rows
+    )
+    return row_html
+
+
+# ---------------------------------------------------------------------------
+# MVRV-Z / Price bullish divergence -- a confirming/context signal, NOT a
+# weighted indicator (never added to WEIGHT_MAP, _ALL_TRACKED_TOKENS, or
+# either pie chart, per spec). Detects the pattern that preceded the actual
+# Nov 2022 bottom: price made a LOWER low than its prior swing low, but
+# MVRV Z-Score made a HIGHER low (-1.36 vs. the June 2022 -2.53 low) --
+# i.e. the price washout wasn't matched by an equally deep on-chain
+# capitulation, a classic bullish-divergence setup.
+#
+# Local-minimum definition: standard swing-low detection -- a day counts as
+# a local minimum if its price is the lowest value in the +/-swing_window
+# days around it (needs the full window on both sides to count, so the most
+# recent `swing_window` days can never themselves qualify -- avoids calling
+# "still falling" a bottom). Adjacent minima within swing_window days of
+# each other are collapsed into one (keeping the lower price) so a multi-
+# day flat bottom doesn't get counted as several separate swing lows.
+MVRV_DIVERGENCE_LOOKBACK_DAYS = 180
+MVRV_DIVERGENCE_SWING_WINDOW = 14
+MVRV_DIVERGENCE_DATE_TOLERANCE_DAYS = 3  # how far a price minimum's date may sit from the
+                                          # nearest available MVRV_Z__history date and still be
+                                          # treated as "the Z-Score for that day" rather than N/A
+
+
+def _find_local_price_minima(dated_price_history, lookback_days, swing_window):
+    if not dated_price_history:
+        return []
+    series = sorted(dated_price_history, key=lambda t: t[0])
+    cutoff = series[-1][0] - timedelta(days=lookback_days)
+    window = [(d, p) for d, p in series if d >= cutoff]
+    raw_minima = []
+    for i in range(swing_window, len(window) - swing_window):
+        d, p = window[i]
+        sub_prices = [pp for _, pp in window[i - swing_window: i + swing_window + 1]]
+        if p == min(sub_prices):
+            raw_minima.append((d, p))
+    # Collapse adjacent minima within swing_window days of each other --
+    # a flat multi-day bottom shouldn't count as multiple distinct swing lows.
+    minima = []
+    for d, p in raw_minima:
+        if minima and (d - minima[-1][0]).days <= swing_window:
+            if p < minima[-1][1]:
+                minima[-1] = (d, p)
+        else:
+            minima.append((d, p))
+    return minima
+
+
+def _nearest_dated_history_value(dates, values, target_date, tolerance_days):
+    """Nearest cache["X__history"]["dates"]/["values"] entry to target_date,
+    or None if the closest available point is further than tolerance_days
+    away -- returning a distant point silently mislabeled as "the value for
+    this day" would be worse than honestly reporting no match."""
+    best_idx, best_diff = None, None
+    for i, d_str in enumerate(dates):
+        try:
+            d = date.fromisoformat(d_str)
+        except (TypeError, ValueError):
+            continue
+        diff = abs((d - target_date).days)
+        if best_diff is None or diff < best_diff:
+            best_idx, best_diff = i, diff
+    if best_idx is None or best_diff > tolerance_days:
+        return None
+    return values[best_idx]
+
+
+def detect_mvrv_price_divergence(cache, dated_price_history,
+                                  lookback_days=MVRV_DIVERGENCE_LOOKBACK_DAYS,
+                                  swing_window=MVRV_DIVERGENCE_SWING_WINDOW):
+    """Returns a dict describing the divergence check -- always includes
+    "available" (bool); when True, also "divergence" (bool) and "point1"/
+    "point2" (each (date, price, z_score)); when False, "reason" (str)
+    explaining honestly why no call could be made yet, plus "point1"/
+    "point2" filled in wherever they WERE identifiable (e.g. minima found
+    but no matching Z-Score history), so the eventual display can show
+    partial progress rather than a bare N/A."""
+    minima = _find_local_price_minima(dated_price_history, lookback_days, swing_window)
+    if len(minima) < 2:
+        return {
+            "available": False,
+            "reason": f"only {len(minima)} local price minima identified in the trailing "
+                      f"{lookback_days}d (need 2) — {'not enough price history yet' if not dated_price_history else 'market has not made a clear swing low/low/low pattern yet'}",
+            "point1": None, "point2": None,
+        }
+    first_min, second_min = minima[-2], minima[-1]
+
+    mvrv_hist = cache.get("MVRV_Z__history", {})
+    mvrv_dates, mvrv_values = mvrv_hist.get("dates", []), mvrv_hist.get("values", [])
+    z1 = _nearest_dated_history_value(mvrv_dates, mvrv_values, first_min[0], MVRV_DIVERGENCE_DATE_TOLERANCE_DAYS)
+    z2 = _nearest_dated_history_value(mvrv_dates, mvrv_values, second_min[0], MVRV_DIVERGENCE_DATE_TOLERANCE_DAYS)
+    point1 = (first_min[0], first_min[1], z1)
+    point2 = (second_min[0], second_min[1], z2)
+
+    if z1 is None or z2 is None:
+        return {
+            "available": False,
+            "reason": f"MVRV Z-Score's own dated history is too sparse to match against these two price "
+                      f"minima ({len(mvrv_dates)}d of dated Z-Score history available; need a point within "
+                      f"{MVRV_DIVERGENCE_DATE_TOLERANCE_DAYS}d of both {first_min[0]} and {second_min[0]})",
+            "point1": point1, "point2": point2,
+        }
+
+    divergence = second_min[1] < first_min[1] and z2 > z1
+    return {"available": True, "divergence": divergence, "point1": point1, "point2": point2}
+
+
+def build_divergence_card_html(result):
+    """Standalone §6 Pattern Signals card HTML for {{DIVERGENCE_CARD_HTML}}
+    -- status, the two comparison points (date/price/Z-score), one-line
+    explainer. Never touches WEIGHT_MAP or either pie chart -- context
+    only, per spec."""
+    explainer = ("Price making a lower low while MVRV Z-Score makes a higher low is the pattern that "
+                 "preceded the actual Nov 2022 bottom (price lower low, but Z-Score -1.36 vs. the June "
+                 "2022 -2.53 low) — the price washout not matched by equally deep on-chain capitulation.")
+
+    def _point_html(label, point):
+        if point is None:
+            return f'<div class="divergence-point"><strong>{label}:</strong> —</div>'
+        d, p, z = point
+        z_str = f"{z:.2f}" if z is not None else "N/A (no matching Z-Score history)"
+        return (f'<div class="divergence-point"><strong>{label}:</strong> {d.isoformat()} '
+                f'— price ${p:,.0f}, MVRV Z-Score {z_str}</div>')
+
+    if not result["available"]:
+        status_html = '<span class="status-pill st-mid">N/A</span>'
+        body = f'<div class="divergence-reason">{result["reason"]}</div>'
+    elif result["divergence"]:
+        status_html = '<span class="status-pill st-buy">DIVERGENCE DETECTED</span>'
+        body = ""
+    else:
+        status_html = '<span class="status-pill st-mid">No divergence</span>'
+        body = ""
+
+    points_html = _point_html("Point 1 (earlier low)", result["point1"]) + \
+                  _point_html("Point 2 (more recent low)", result["point2"])
+
+    return (
+        f'<div class="pattern-card">'
+        f'<div class="pattern-card-status">{status_html}</div>'
+        f'{body}{points_html}'
+        f'<div class="pattern-card-explainer">{explainer}</div>'
+        f'</div>'
+    )
+
+
 def build_verdict_top(values):
     """Table 3's own verdict -- same mechanical weighted-tally structure as
     build_verdict() above (same st-strong-buy/st-buy/st-near/st-no
@@ -2488,6 +2863,35 @@ def main():
             values[f"{token}_TARGET"] = f"N/A \u2014 building history ({n_points}/{MIN_HISTORY_DAYS} days). Reference: {ref}"
             print(f"  {token}: only {n_points}/{MIN_HISTORY_DAYS} days of history accumulated, staying N/A")
 
+    # MVRV Z-Score: adaptive bottom-tail percentile threshold, replacing the
+    # fixed <=0.0 the BG_METRICS loop above already scored it against --
+    # see the long comment above get_adaptive_mvrv_threshold() for why.
+    # WEIGHT_MAP["MVRV_Z"] is untouched (still 3, set once at module load)
+    # -- only the comparison threshold varies day to day, same pattern
+    # PROD_COST already uses; this never changes get_master_rank_order()'s
+    # output. Below the 365-day gate, the BG_METRICS loop's own fixed-0.0
+    # result (status/target already set above) is left completely alone --
+    # this block only overrides when the adaptive number is actually real.
+    mvrv_threshold, mvrv_n = get_adaptive_mvrv_threshold(cache)
+    mvrv_val = values.get("MVRV_Z")
+    if mvrv_threshold is not None and mvrv_val is not None:
+        label, css = status_pill(mvrv_val, "low", mvrv_threshold, cache=cache, token="MVRV_Z")
+        values["MVRV_Z_STATUS_LABEL"] = label
+        values["MVRV_Z_STATUS_CLASS"] = css
+        values["MVRV_Z_TARGET"] = (
+            f"\u2264 {round(mvrv_threshold, 2)} (live, {MVRV_ADAPTIVE_PERCENTILE}th pct. "
+            f"of trailing {mvrv_n}d, capped {MVRV_ADAPTIVE_WINDOW_DAYS}d)"
+        )
+        print(f"  MVRV_Z: adaptive {MVRV_ADAPTIVE_PERCENTILE}th percentile threshold = "
+              f"{round(mvrv_threshold, 2)} (n={mvrv_n}) -> {label}")
+    else:
+        values["MVRV_Z_TARGET"] = (
+            f"{target_for('MVRV_Z')} (fixed \u2014 building adaptive history, "
+            f"{mvrv_n}/{MVRV_ADAPTIVE_MIN_DAYS} days)"
+        )
+        print(f"  MVRV_Z: only {mvrv_n}/{MVRV_ADAPTIVE_MIN_DAYS} days of adaptive history "
+              f"accumulated, staying on fixed 0.0 threshold")
+
     # Supply in Loss = 100 - % Supply in Profit (BGeometrics only exposes
     # the profit side under this slug; the loss framing is the one your
     # original ranking used, and the one this whole project started from).
@@ -2544,7 +2948,8 @@ def main():
     print(f"  ASOPR_EST (modeled from SOPR={values.get('SOPR')}): {asopr_est} -> {label}")
 
     print("Fetching price history from CoinGecko (340 days, needed for NVT Golden Cross)...")
-    price_history = fetch_coingecko_history(days=340)
+    price_history_dated = fetch_coingecko_history(days=340)
+    price_history = [p for _, p in price_history_dated]
     spot_price = price_history[-1] if price_history else None
 
     # Realized Price: buy-favorable when spot trades below the realized-
@@ -2697,6 +3102,11 @@ def main():
     values["MINER_CAP_TARGET"] = target_for("MINER_CAP")
     print(f"  Miner Capitulation (Hash Ribbons): {mc_state}, hashrate MA deviation {hr_deviation}%")
 
+    # Tranche 3's persistence gate needs a day-streak counter for this
+    # categorical state -- see state_streak() for why consecutive_buy_days()
+    # (built for numeric threshold crossings) doesn't apply here.
+    mc_buy_streak = state_streak(cache, "MINER_CAP", "BUY SIGNAL", mc_state or "CHECK")
+
     print("Fetching transaction volume history from Blockchain.com (340 days)...")
     tx_vol_hist = fetch_blockchain_chart("estimated-transaction-volume-usd", days=340)
     nvt_gc = compute_nvt_golden_cross(price_history, tx_vol_hist)
@@ -2786,6 +3196,14 @@ def main():
     # row's weight/status logic already uses.
     values["SIGNAL_SUMMARY_BOX"] = build_signal_summary_html(values)
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")
+
+    print("Building Capital Deployment Tranches...")
+    values["TRANCHE_STATUS_HTML"] = build_tranche_status(values, cache)
+
+    print("Checking MVRV-Z / price divergence pattern...")
+    divergence_result = detect_mvrv_price_divergence(cache, price_history_dated)
+    values["DIVERGENCE_CARD_HTML"] = build_divergence_card_html(divergence_result)
+    print(f"  Divergence: {'available, ' + ('DETECTED' if divergence_result.get('divergence') else 'no divergence') if divergence_result['available'] else 'N/A — ' + divergence_result['reason']}")
 
     # -----------------------------------------------------------------
     # TABLE 3 — Cycle Top Rank & Weight. Phase 2: every indicator computes

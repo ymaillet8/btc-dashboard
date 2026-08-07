@@ -177,6 +177,33 @@
   }
   .fine-print strong{color:var(--red);}
 
+  /* --- Capital Deployment Tranches --- */
+  .tranche-row{
+    display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 14px;
+    border:1px solid var(--border); border-radius:10px; background:var(--panel);
+    padding:14px 18px; margin-bottom:12px;
+  }
+  .tranche-row.tranche-confirmed{border-left:3px solid var(--green);}
+  .tranche-row.tranche-partial{border-left:3px solid var(--amber);}
+  .tranche-row.tranche-not-yet{border-left:3px solid var(--text-faint);}
+  .tranche-name{font-family:var(--sans); font-weight:600; font-size:14px; flex:1 1 260px;}
+  .tranche-verdict{font-family:var(--mono); font-size:13px; font-weight:600; flex:0 0 auto;}
+  .tranche-components{font-family:var(--mono); font-size:12px; color:var(--text-dim); flex-basis:100%;}
+
+  /* --- Pattern Signals (divergence card) --- */
+  .pattern-card{
+    border:1px solid var(--border); border-radius:12px; background:var(--panel);
+    padding:22px 26px;
+  }
+  .pattern-card-status{margin-bottom:14px;}
+  .divergence-point{font-family:var(--mono); font-size:13px; color:var(--text-dim); margin-top:6px;}
+  .divergence-point strong{color:var(--text); font-family:var(--sans);}
+  .divergence-reason{font-size:13px; color:var(--text-faint); margin-top:4px;}
+  .pattern-card-explainer{
+    margin-top:16px; padding-top:14px; border-top:1px solid var(--border);
+    font-size:13px; color:var(--text-faint); line-height:1.6;
+  }
+
   /* --- Footer --- */
   footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-faint); line-height:1.7;}
   footer a{color:var(--text-dim);}
@@ -335,6 +362,24 @@
         <strong>This is a mechanical tally, not financial advice or a price prediction.</strong> It cannot see your Power Law check, which overrides everything above. Past patterns are not guarantees of future price action.
       </div>
     </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">§5 · CAPITAL DEPLOYMENT</div>
+      <div class="section-title">Capital Deployment Tranches</div>
+      <div class="section-sub">Three tranches, sequenced by the observed 2015/2018/2022 firing order — early movers (Reserve Risk + LTH-SOPR) tend to turn first, core confirmers (MVRV Z-Score + Puell) next, Hash Ribbons' recovery historically last. A tranche only reads CONFIRMED once <strong>both</strong> its components have held buy-favorable for 5+ consecutive days — a single favorable day shows as "flashing" instead, to avoid mistaking noise for confirmation. Context only: none of this feeds the weighted verdict above.</div>
+    </div>
+    {{TRANCHE_STATUS_HTML}}
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <div class="section-num">§6 · PATTERN SIGNALS</div>
+      <div class="section-title">MVRV-Z / Price Divergence</div>
+      <div class="section-sub">A confirming/context signal, not a weighted indicator — doesn't feed the verdict or either pie chart. Watches for price making a lower low while MVRV Z-Score makes a higher low over the trailing 180 days, the pattern that preceded the actual Nov 2022 bottom.</div>
+    </div>
+    {{DIVERGENCE_CARD_HTML}}
   </div>
 
   <footer>
