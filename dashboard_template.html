@@ -82,6 +82,7 @@
   .fresh-banner strong{color:var(--amber);}
 
   /* --- Tables --- */
+  .table-scroll{width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch;}
   table{width:100%; border-collapse:collapse; font-size:14.5px;}
   thead th{
     text-align:left; font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
@@ -232,6 +233,56 @@
     font-size:13px; color:var(--text-faint); line-height:1.6;
   }
 
+  /* --- Inline subsection label (e.g. divergence card inside §1) --- */
+  .subsection-label{
+    font-family:var(--serif); font-size:15px; font-weight:700; color:var(--text);
+    margin:28px 0 12px; padding-top:22px; border-top:1px solid var(--border);
+  }
+  .subsection-label-note{
+    font-family:var(--sans); font-size:12px; font-weight:400; color:var(--text-faint); margin-left:8px;
+  }
+
+  /* --- Collapsible sections (native <details>/<summary>) --- */
+  details.section{margin-top:56px;}
+  details.section > summary.section-head{
+    cursor:pointer; list-style:none; position:relative; padding-right:34px;
+  }
+  details.section > summary.section-head::-webkit-details-marker{display:none;}
+  details.section > summary.section-head::after{
+    content:"▸"; position:absolute; right:2px; top:2px; font-family:var(--mono); font-size:15px;
+    color:var(--text-faint); transition:transform .15s ease;
+  }
+  details.section[open] > summary.section-head::after{transform:rotate(90deg);}
+  details.section > summary.section-head:hover::after{color:var(--text-dim);}
+  details.section > summary.section-head:focus-visible{outline:2px solid var(--blue); outline-offset:4px; border-radius:4px;}
+
+  /* --- Cycle Bottom / Cycle Top phase accents --- */
+  details.section.accent-buy{
+    border-left:4px solid var(--green); border-radius:6px;
+    background:linear-gradient(90deg, rgba(23,56,41,.55), transparent 260px);
+    padding:18px 20px 24px;
+  }
+  details.section.accent-sell{
+    border-left:4px solid var(--red); border-radius:6px;
+    background:linear-gradient(90deg, rgba(63,30,30,.55), transparent 260px);
+    padding:18px 20px 24px;
+  }
+
+  /* --- Phase transition divider (between Cycle Bottom and Cycle Top) --- */
+  .phase-divider{
+    display:flex; align-items:center; gap:16px; margin:48px 0; user-select:none;
+  }
+  .phase-divider::before, .phase-divider::after{content:""; flex:1 1 auto; height:1px; background:var(--border);}
+  .phase-divider-label{
+    display:inline-block; white-space:nowrap; text-align:center;
+    font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--text-dim); padding:7px 16px; border:1px solid var(--border); border-radius:999px;
+    background:var(--panel-2);
+  }
+  .phase-dot{width:8px; height:8px; border-radius:50%; display:inline-block; vertical-align:middle; margin:0 8px;}
+  .phase-dot-buy{background:var(--green);}
+  .phase-dot-sell{background:var(--red);}
+
   /* --- Footer --- */
   footer{margin-top:64px; padding-top:24px; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-faint); line-height:1.7;}
   footer a{color:var(--text-dim);}
@@ -241,6 +292,12 @@
   @media (max-width:720px){
     h1{font-size:32px;} .abstract{font-size:15px;} .master-name{font-size:20px;}
     table{font-size:13px;} tbody td{padding:12px 10px;} .tip-content{width:220px;}
+    details.section.accent-buy, details.section.accent-sell{padding:14px 12px 18px; border-left-width:3px;}
+    .phase-divider{margin:36px 0; gap:10px;}
+    .phase-divider-label{
+      font-size:10px; padding:8px 14px; white-space:normal; text-align:center;
+      border-radius:14px; line-height:1.6; max-width:78%;
+    }
   }
 </style>
 </head>
@@ -274,43 +331,49 @@
     </div>
   </div>
 
-  <div class="section">
-    <div class="section-head">
+  <details class="section accent-buy" open>
+    <summary class="section-head">
       <div class="section-num">§1 · WEIGHTED SYNTHESIS — BOTTOM</div>
       <div class="section-title">Cycle Bottom Rank &amp; Weight</div>
       <div class="section-sub">Every tracked bottom-side indicator, ranked by actual current weight, heaviest first — the primary content of this page. Power Law holds veto power and sits outside the weight pool by design. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight.</div>
-    </div>
+    </summary>
     <div class="pie-wrap">
       <div class="pie-caption">Each slice is an indicator's share of the weighted verdict — colored in if it's currently a buy signal, grey if not.</div>
       {{WEIGHT_PIE_SVG}}
     </div>
-    <table>
+    <div class="table-scroll"><table>
       <thead><tr><th style="width:5%">#</th><th style="width:23%">Indicator</th><th style="width:12%">Reading</th><th style="width:9%">Weight</th><th style="width:19%">Target</th><th style="width:17%">Status Today</th><th style="width:15%">Source</th></tr></thead>
       <tbody>
         {{FULL_WEIGHTED_BREAKDOWN_ROWS}}
       </tbody>
-    </table>
+    </table></div>
     <div class="table-source-line">{{TOTAL_TRACKED_COUNT}} indicators tracked in total · weight % is share of the scoreable pool only, recalculated fresh each run</div>
-  </div>
+    <div class="subsection-label">MVRV-Z / Price Divergence<span class="subsection-label-note">context signal, not weighted — doesn't feed the verdict or either pie chart</span></div>
+    {{DIVERGENCE_CARD_HTML}}
+  </details>
 
   {{SIGNAL_SUMMARY_BOX_TOP}}
 
-  <div class="section">
-    <div class="section-head">
+  <div class="phase-divider">
+    <span class="phase-divider-label"><span class="phase-dot phase-dot-buy"></span> Bottom-side signals above · Top-side signals below <span class="phase-dot phase-dot-sell"></span></span>
+  </div>
+
+  <details class="section accent-sell" open>
+    <summary class="section-head">
       <div class="section-num">§2 · WEIGHTED SYNTHESIS — TOP</div>
       <div class="section-title">Cycle Top Rank &amp; Weight</div>
       <div class="section-sub">Every tracked top-side indicator, ranked by actual current weight, heaviest first — a genuinely separate weight pool from the Cycle Bottom table above, sharing machinery (leeway/sigma system, rolling-percentile thresholds) but not a shared pool, so each table can independently report its own phase. No Power Law row here — Power Law has no published top-side analog. Hover the <span class="tip-icon" style="display:inline-flex;">i</span> next to any name for methodology; <span class="anchor-icon">⚓</span> marks an indicator currently carrying real scoring weight. MVRV Z-Score, Puell Multiple, and Thermocap Multiple join the pool once their own rolling-percentile threshold has enough history (90+ days); Pi Cycle Top is deliberately display-only, not yet weighted.</div>
-    </div>
+    </summary>
     <div class="pie-wrap">
       <div class="pie-caption">Each slice is an indicator's share of the top-side weighted verdict — colored in if it's currently a top signal, grey if not.</div>
       {{WEIGHT_PIE_SVG_TOP}}
     </div>
-    <table>
+    <div class="table-scroll"><table>
       <thead><tr><th style="width:5%">#</th><th style="width:23%">Indicator</th><th style="width:12%">Reading</th><th style="width:9%">Weight</th><th style="width:19%">Target</th><th style="width:17%">Status Today</th><th style="width:15%">Source</th></tr></thead>
       <tbody>
         {{FULL_WEIGHTED_BREAKDOWN_ROWS_TOP}}
       </tbody>
-    </table>
+    </table></div>
     <div class="table-source-line">{{TOTAL_TRACKED_COUNT_TOP}} indicators tracked in total · weight % is share of the scoreable pool only, recalculated fresh each run</div>
     <div class="discussion" style="margin-top:16px;">
       <strong>Table 3 verdict:</strong> {{VERDICT_COUNT_TOP}} of today's scoreable top-side indicators are top-favorable ({{VERDICT_PCT_TOP}}% of scored weight) — {{VERDICT_HEADLINE_TOP}}
@@ -322,15 +385,15 @@
         <strong>This is a mechanical tally, not financial advice or a price prediction.</strong> Same caveats as the Cycle Bottom table above.
       </div>
     </div>
-  </div>
+  </details>
 
-  <div class="section">
-    <div class="section-head">
+  <details class="section" open>
+    <summary class="section-head">
       <div class="section-num">§3 · LIVE — POLYMARKET GAMMA API</div>
       <div class="section-title">Prediction Market</div>
       <div class="section-sub">Crowd probability, not a forecast — deliberately not scored in §1. Hover for the caveat.</div>
-    </div>
-    <table>
+    </summary>
+    <div class="table-scroll"><table>
       <thead><tr><th style="width:14%">Horizon</th><th style="width:42%">Market Question</th><th style="width:16%">Yes Odds</th><th style="width:14%">Resolves</th><th style="width:14%">Volume</th></tr></thead>
       <tbody>
         <tr>
@@ -371,15 +434,15 @@
           <td class="target">${{POLY_YEARLY_VOLUME}}</td>
         </tr>
       </tbody>
-    </table>
+    </table></div>
     <div class="table-source-line">Auto-matched daily to whichever live BTC market falls closest to each horizon · $25,000 minimum volume · "no match" shown honestly rather than forced</div>
-  </div>
+  </details>
 
-  <div class="section">
-    <div class="section-head">
+  <details class="section" open>
+    <summary class="section-head">
       <div class="section-num">§4 · DISCUSSION</div>
       <div class="section-title">What Today's Reading Means</div>
-    </div>
+    </summary>
     <div class="discussion">
       <strong>Where things stand (Cycle Bottom table):</strong> {{VERDICT_COUNT}} of today's scoreable indicators are buy-favorable ({{VERDICT_PCT}}% of scored weight) — {{VERDICT_HEADLINE}}. <strong>Power Law has not confirmed</strong> — nothing above substitutes for that. (Cycle Top table's own verdict is discussed inline in §2 above, since it isn't yet weighted enough to warrant a second full discussion section.)
       <br><br>
@@ -390,26 +453,17 @@
         <strong>This is a mechanical tally, not financial advice or a price prediction.</strong> It cannot see your Power Law check, which overrides everything above. Past patterns are not guarantees of future price action.
       </div>
     </div>
-  </div>
+  </details>
 
-  <div class="section">
-    <div class="section-head">
+  <details class="section" open>
+    <summary class="section-head">
       <div class="section-num">§5 · CAPITAL DEPLOYMENT</div>
       <div class="section-title">Capital Deployment Tranches</div>
       <div class="section-sub">Three tranches, sequenced by the observed 2015/2018/2022 firing order — early movers (Reserve Risk + LTH-SOPR) tend to turn first, core confirmers (MVRV Z-Score + Puell) next, Hash Ribbons' recovery historically last. A tranche only reads CONFIRMED once <strong>both</strong> its components have held buy-favorable for 5+ consecutive days — a single favorable day shows as "flashing" instead, to avoid mistaking noise for confirmation. Context only: none of this feeds the weighted verdict above.</div>
-    </div>
+    </summary>
     {{TRANCHE_CHECKLIST_HTML}}
     {{TRANCHE_STATUS_HTML}}
-  </div>
-
-  <div class="section">
-    <div class="section-head">
-      <div class="section-num">§6 · PATTERN SIGNALS</div>
-      <div class="section-title">MVRV-Z / Price Divergence</div>
-      <div class="section-sub">A confirming/context signal, not a weighted indicator — doesn't feed the verdict or either pie chart. Watches for price making a lower low while MVRV Z-Score makes a higher low over the trailing 180 days, the pattern that preceded the actual Nov 2022 bottom.</div>
-    </div>
-    {{DIVERGENCE_CARD_HTML}}
-  </div>
+  </details>
 
   <footer>
     Rebuilt daily via GitHub Actions from BGeometrics, CoinGecko, Blockchain.com, Alternative.me, and Polymarket — all free tiers.

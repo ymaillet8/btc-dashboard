@@ -2728,8 +2728,9 @@ def detect_mvrv_price_divergence(cache, dated_price_history,
 
 
 def build_divergence_card_html(result):
-    """Standalone §6 Pattern Signals card HTML for {{DIVERGENCE_CARD_HTML}}
-    -- status, the two comparison points (date/price/Z-score), one-line
+    """Pattern Signals card HTML for {{DIVERGENCE_CARD_HTML}}, rendered
+    inline at the bottom of §1 (Cycle Bottom) below the last table row --
+    status, the two comparison points (date/price/Z-score), one-line
     explainer. Never touches WEIGHT_MAP or either pie chart -- context
     only, per spec."""
     explainer = ("Price making a lower low while MVRV Z-Score makes a higher low is the pattern that "
