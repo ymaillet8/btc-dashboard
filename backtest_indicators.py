@@ -202,7 +202,7 @@ def walk_forward_statuses(dated_values, direction, threshold_fn, token,
     for d, v in dated_values:
         hv = hist_dict.get(d)
         if hv is not None:
-            ud.history_append(cache, token, float(hv))
+            ud.history_append(cache, token, float(hv), date=d)
         if v is None:
             out.append((d, v, "CHECK", "st-mid"))
             continue
@@ -446,7 +446,7 @@ def build_nvt_gc(market_price_series, tx_volume_series):
     cache = {}
     statuses = []
     for d, v in dated_raw:
-        ud.history_append(cache, "NVT_GC", float(v))
+        ud.history_append(cache, "NVT_GC", float(v), date=d)
         if v > 2.2:
             statuses.append((d, v, "OVERPRICED", "st-no"))
         else:

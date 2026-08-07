@@ -145,18 +145,37 @@ MIN_HISTORY_DAYS = 90       # minimum accumulated points before trusting a compu
 PERCENTILE_CUTOFF = 10      # bottom 10th percentile of trailing history = buy-favorable
 
 
-def history_append(cache, key, value):
+def history_append(cache, key, value, date=None):
     """Append today's value to this token's rolling history, trimmed to
     HISTORY_MAX_LEN. Separate from cache_store()'s single last-known-good
-    value — this list is what percentile thresholds get computed from."""
+    value — this list is what percentile thresholds get computed from.
+
+    Tracks the calendar day (UTC) of the last append per key. A second call
+    on the same day (e.g. a manual workflow_dispatch rerun after the
+    scheduled run already fetched today) replaces that day's entry instead
+    of adding a duplicate — otherwise the rolling n count, and therefore
+    MIN_HISTORY_DAYS gating, would be inflated by reruns rather than
+    reflecting genuine distinct days.
+
+    `date` lets callers that replay historical days (e.g.
+    backtest_indicators.py's walk-forward loops, which call this many times
+    within one real wall-clock run to simulate one call per past day)
+    supply the simulated day explicitly, instead of every call collapsing
+    onto the real "today"."""
     if value is None:
         return
     hist_key = f"{key}__history"
-    entry = cache.get(hist_key, {"values": []})
+    entry = cache.get(hist_key, {"values": [], "last_date": None})
     try:
-        entry["values"].append(float(value))
+        fvalue = float(value)
     except (TypeError, ValueError):
         return
+    day = date.isoformat() if date is not None else datetime.now(timezone.utc).date().isoformat()
+    if entry.get("last_date") == day and entry["values"]:
+        entry["values"][-1] = fvalue
+    else:
+        entry["values"].append(fvalue)
+        entry["last_date"] = day
     entry["values"] = entry["values"][-HISTORY_MAX_LEN:]
     cache[hist_key] = entry
 
