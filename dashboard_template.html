@@ -177,6 +177,34 @@
   }
   .fine-print strong{color:var(--red);}
 
+  /* --- Tranche Checklist (compact to-do-list widget) --- */
+  .tranche-checklist{
+    border:1px solid var(--border); border-radius:12px; background:var(--panel);
+    padding:18px 20px 16px; margin-bottom:20px;
+  }
+  .checklist-tranche{margin-bottom:16px;}
+  .checklist-tranche:last-child{margin-bottom:0;}
+  .check-row{display:flex; align-items:center; gap:10px; padding:4px 0;}
+  .check-child{padding-left:28px;}
+  .check-parent .check-label{font-family:var(--sans); font-weight:600; font-size:14px;}
+  .check-child .check-label{font-family:var(--mono); font-size:13px;}
+  .checkbox{
+    flex:0 0 auto; width:18px; height:18px; line-height:18px; text-align:center;
+    font-size:15px; display:inline-block;
+  }
+  .checkbox.state-confirmed{color:var(--green);}
+  .checkbox.state-flashing{color:var(--amber);}
+  .checkbox.state-not-yet{color:var(--text-faint);}
+  .check-row.state-confirmed .check-label{color:var(--green);}
+  .check-row.state-flashing .check-label{color:var(--amber);}
+  .check-row.state-not-yet .check-label{color:var(--text-faint);}
+  @media (max-width:480px){
+    .tranche-checklist{padding:14px 14px 12px;}
+    .check-parent .check-label{font-size:13px;}
+    .check-child .check-label{font-size:12px;}
+    .check-child{padding-left:22px;}
+  }
+
   /* --- Capital Deployment Tranches --- */
   .tranche-row{
     display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 14px;
@@ -370,6 +398,7 @@
       <div class="section-title">Capital Deployment Tranches</div>
       <div class="section-sub">Three tranches, sequenced by the observed 2015/2018/2022 firing order — early movers (Reserve Risk + LTH-SOPR) tend to turn first, core confirmers (MVRV Z-Score + Puell) next, Hash Ribbons' recovery historically last. A tranche only reads CONFIRMED once <strong>both</strong> its components have held buy-favorable for 5+ consecutive days — a single favorable day shows as "flashing" instead, to avoid mistaking noise for confirmation. Context only: none of this feeds the weighted verdict above.</div>
     </div>
+    {{TRANCHE_CHECKLIST_HTML}}
     {{TRANCHE_STATUS_HTML}}
   </div>
 

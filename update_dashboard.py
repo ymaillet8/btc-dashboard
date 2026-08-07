@@ -2448,20 +2448,62 @@ def build_verdict(values):
 TRANCHE_PERSISTENCE_DAYS = 5
 
 
-def _tranche_numeric_component(cache, values, token, direction, threshold):
-    """(days, label_html) for one numeric threshold-crossing component of a
-    tranche. days=0 if not currently favorable at all, else however many
-    consecutive most-recent days it's held (from consecutive_buy_days(),
-    uncapped -- the caller compares against TRANCHE_PERSISTENCE_DAYS)."""
-    name = DISPLAY_NAMES.get(token, token)
-    if threshold is None:
-        return 0, f"{name} — no threshold available"
-    days = consecutive_buy_days(cache, token, direction, threshold) or 0
+def _component_state(days):
+    """Tri-state classification for one component's persistence day-count --
+    'confirmed' (>=TRANCHE_PERSISTENCE_DAYS consecutive days), 'flashing'
+    (1 to TRANCHE_PERSISTENCE_DAYS-1), or 'not-yet' (0). Shared by every
+    consumer of _compute_tranche_data() below (the detailed §5 panel AND
+    the checklist widget) so they can never disagree about what state a
+    given day-count represents."""
     if days >= TRANCHE_PERSISTENCE_DAYS:
-        return days, f"{name} ✓"
+        return "confirmed"
     if days >= 1:
-        return days, f"{name} \U0001f7e1 flashing (day {days}/{TRANCHE_PERSISTENCE_DAYS})"
-    return days, f"{name} not yet"
+        return "flashing"
+    return "not-yet"
+
+
+def _compute_tranche_data(values, cache):
+    """Single source of truth for every tranche component's persistence
+    day-count -- computed once here, consumed by BOTH build_tranche_status()
+    (the detailed §5 panel) and build_tranche_checklist_html() (the compact
+    checklist widget), so the two displays are structurally incapable of
+    drifting out of sync with each other; neither re-derives a day-count
+    the other already computed.
+
+    Returns [{"name": ..., "components": [(label, days), ...]}, ...], one
+    dict per tranche, in order."""
+    # Tranche 1 — Early Movers: Reserve Risk + LTH-SOPR, both already
+    # numeric threshold-crossing indicators in BG_METRICS.
+    rr_dir, rr_thr = BG_METRICS["RESERVE_RISK"][1], BG_METRICS["RESERVE_RISK"][2]
+    lth_dir, lth_thr = BG_METRICS["LTH_SOPR"][1], BG_METRICS["LTH_SOPR"][2]
+    rr_days = (consecutive_buy_days(cache, "RESERVE_RISK", rr_dir, rr_thr) or 0) if rr_thr is not None else 0
+    lth_days = (consecutive_buy_days(cache, "LTH_SOPR", lth_dir, lth_thr) or 0) if lth_thr is not None else 0
+
+    # Tranche 2 — Core Confirmers: MVRV Z-Score (adaptive threshold if it's
+    # live yet, else the same fixed 0.0 fallback the rest of the page is
+    # using today — always the SAME threshold actually in effect, not a
+    # second, disconnected copy of the logic) + Puell Multiple.
+    mvrv_thr, _mvrv_n = get_adaptive_mvrv_threshold(cache)
+    if mvrv_thr is None:
+        mvrv_thr = BG_METRICS["MVRV_Z"][2]
+    puell_dir, puell_thr = BG_METRICS["PUELL"][1], BG_METRICS["PUELL"][2]
+    mvrv_days = (consecutive_buy_days(cache, "MVRV_Z", "low", mvrv_thr) or 0) if mvrv_thr is not None else 0
+    puell_days = (consecutive_buy_days(cache, "PUELL", puell_dir, puell_thr) or 0) if puell_thr is not None else 0
+
+    # Tranche 3 — All Clear: Hash Ribbons flipping from CAPITULATION to its
+    # recovery/BUY SIGNAL state. Categorical, not threshold-based, so this
+    # reads the day-streak state_streak() already maintained in main() (via
+    # cache["MINER_CAP__streak"]) rather than consecutive_buy_days().
+    mc_days = cache.get("MINER_CAP__streak", {}).get("count", 0)
+
+    return [
+        {"name": "Tranche 1 (~20-25% allocation) — Early Movers",
+         "components": [("Reserve Risk", rr_days), ("LTH-SOPR", lth_days)]},
+        {"name": "Tranche 2 (~35-40% allocation) — Core Confirmers",
+         "components": [("MVRV Z-Score", mvrv_days), ("Puell Multiple", puell_days)]},
+        {"name": "Tranche 3 (remainder) — All Clear",
+         "components": [("Hash Ribbons recovery", mc_days)]},
+    ]
 
 
 def _tranche_verdict(component_days):
@@ -2479,59 +2521,52 @@ def _tranche_verdict(component_days):
     return "⛔ NOT YET", "tranche-not-yet"
 
 
-def build_tranche_status(values, cache):
+def _component_label_text(label, days):
+    """Detailed-panel text for one component, e.g. 'Reserve Risk ✓' /
+    'LTH-SOPR 🟡 flashing (day 2/5)' / 'Puell Multiple not yet' -- text
+    form of the same tri-state _component_state() classifies."""
+    state = _component_state(days)
+    if state == "confirmed":
+        return f"{label} ✓"
+    if state == "flashing":
+        return f"{label} \U0001f7e1 flashing (day {days}/{TRANCHE_PERSISTENCE_DAYS})"
+    return f"{label} not yet"
+
+
+def build_tranche_status(values, cache, tranche_data=None):
     """Returns ready-to-insert HTML for {{TRANCHE_STATUS_HTML}} -- three
     rows, cheat-sheet style, each showing the tranche verdict plus which
     component(s) are firing. See the module comment above for the
     early-movers/core-confirmers/all-clear rationale and the persistence
-    rule."""
-    rows = []
+    rule. `tranche_data` lets a caller that already computed
+    _compute_tranche_data() (e.g. main(), so it can also feed
+    build_tranche_checklist_html() from the exact same data) pass it
+    straight through instead of this function recomputing it."""
+    if tranche_data is None:
+        tranche_data = _compute_tranche_data(values, cache)
 
-    # Tranche 1 — Early Movers: Reserve Risk + LTH-SOPR, both already
-    # numeric threshold-crossing indicators in BG_METRICS.
-    rr_dir, rr_thr = BG_METRICS["RESERVE_RISK"][1], BG_METRICS["RESERVE_RISK"][2]
-    lth_dir, lth_thr = BG_METRICS["LTH_SOPR"][1], BG_METRICS["LTH_SOPR"][2]
-    rr_days, rr_label = _tranche_numeric_component(cache, values, "RESERVE_RISK", rr_dir, rr_thr)
-    lth_days, lth_label = _tranche_numeric_component(cache, values, "LTH_SOPR", lth_dir, lth_thr)
-    t1_verdict, t1_css = _tranche_verdict([rr_days, lth_days])
-    rows.append((
-        "Tranche 1 (~20-25% allocation) — Early Movers",
-        t1_verdict, t1_css, f"{rr_label}, {lth_label}",
-    ))
-
-    # Tranche 2 — Core Confirmers: MVRV Z-Score (adaptive threshold if it's
-    # live yet, else the same fixed 0.0 fallback the rest of the page is
-    # using today — always the SAME threshold actually in effect, not a
-    # second, disconnected copy of the logic) + Puell Multiple.
-    mvrv_thr, _mvrv_n = get_adaptive_mvrv_threshold(cache)
-    if mvrv_thr is None:
-        mvrv_thr = BG_METRICS["MVRV_Z"][2]
-    puell_dir, puell_thr = BG_METRICS["PUELL"][1], BG_METRICS["PUELL"][2]
-    mvrv_days, mvrv_label = _tranche_numeric_component(cache, values, "MVRV_Z", "low", mvrv_thr)
-    puell_days, puell_label = _tranche_numeric_component(cache, values, "PUELL", puell_dir, puell_thr)
-    t2_verdict, t2_css = _tranche_verdict([mvrv_days, puell_days])
-    rows.append((
-        "Tranche 2 (~35-40% allocation) — Core Confirmers",
-        t2_verdict, t2_css, f"{mvrv_label}, {puell_label}",
-    ))
-
-    # Tranche 3 — All Clear: Hash Ribbons flipping from CAPITULATION to its
-    # recovery/BUY SIGNAL state. Categorical, not threshold-based, so this
-    # reads the day-streak state_streak() already maintained in main() (via
-    # cache["MINER_CAP__streak"]) rather than consecutive_buy_days().
     mc_state = values.get("MINER_CAP_STATE", "CHECK")
-    mc_days = cache.get("MINER_CAP__streak", {}).get("count", 0)
-    if mc_days >= TRANCHE_PERSISTENCE_DAYS:
-        mc_label = f"Hash Ribbons ✓ BUY SIGNAL confirmed ({mc_days}d)"
-    elif mc_days >= 1:
-        mc_label = f"Hash Ribbons \U0001f7e1 flashing (day {mc_days}/{TRANCHE_PERSISTENCE_DAYS})"
-    else:
-        mc_label = f"Hash Ribbons: {mc_state.lower()}"
-    t3_verdict, t3_css = _tranche_verdict([mc_days])
-    rows.append((
-        "Tranche 3 (remainder) — All Clear",
-        t3_verdict, t3_css, mc_label,
-    ))
+    rows = []
+    for i, tranche in enumerate(tranche_data):
+        component_days = [days for _, days in tranche["components"]]
+        verdict, css = _tranche_verdict(component_days)
+        if i == 2:
+            # Tranche 3's single component keeps its own richer wording
+            # (matching the original pre-checklist text exactly) rather
+            # than the generic "{label} ✓" / "not yet" phrasing the other
+            # two tranches use -- still deriving purely from `days`, the
+            # same shared day-count, not a second computation.
+            label, days = tranche["components"][0]
+            state = _component_state(days)
+            if state == "confirmed":
+                components_text = f"Hash Ribbons ✓ BUY SIGNAL confirmed ({days}d)"
+            elif state == "flashing":
+                components_text = f"Hash Ribbons \U0001f7e1 flashing (day {days}/{TRANCHE_PERSISTENCE_DAYS})"
+            else:
+                components_text = f"Hash Ribbons: {mc_state.lower()}"
+        else:
+            components_text = ", ".join(_component_label_text(label, days) for label, days in tranche["components"])
+        rows.append((tranche["name"], verdict, css, components_text))
 
     row_html = "\n".join(
         f'<div class="tranche-row {css}"><div class="tranche-name">{name}</div>'
@@ -2540,6 +2575,50 @@ def build_tranche_status(values, cache):
         for name, verdict, css, components in rows
     )
     return row_html
+
+
+# Unicode box glyphs for the checklist widget: BALLOT BOX WITH CHECK (☑),
+# CIRCLE WITH RIGHT HALF BLACK (◑, used as a "half-filled" stand-in for the
+# flashing/in-progress state), plain BALLOT BOX (☐).
+_CHECKLIST_GLYPH = {"confirmed": "☑", "flashing": "◑", "not-yet": "☐"}
+
+
+def build_tranche_checklist_html(tranche_data):
+    """Compact to-do-list-style widget for {{TRANCHE_CHECKLIST_HTML}} -- a
+    3-second-glance view of the exact same tranche_data
+    _compute_tranche_data() produces for the fuller §5 panel (single source
+    of truth, see that function's docstring; this never re-derives a
+    day-count). Each component gets its own checkbox (checked/flashing/
+    unchecked per _component_state()); each tranche's own parent checkbox
+    is checked only when EVERY one of its components is individually
+    checked -- derived here from the children's states, never a separate
+    stored flag. No explanatory copy -- that's what the §5 panel and README
+    are for."""
+    blocks = []
+    for tranche in tranche_data:
+        child_states = [_component_state(days) for _, days in tranche["components"]]
+        if all(s == "confirmed" for s in child_states):
+            parent_state = "confirmed"
+        elif any(s in ("confirmed", "flashing") for s in child_states):
+            parent_state = "flashing"
+        else:
+            parent_state = "not-yet"
+
+        children_html = "\n".join(
+            f'<div class="check-row check-child state-{state}">'
+            f'<span class="checkbox state-{state}">{_CHECKLIST_GLYPH[state]}</span>'
+            f'<span class="check-label">{label}</span></div>'
+            for (label, _days), state in zip(tranche["components"], child_states)
+        )
+        blocks.append(
+            f'<div class="checklist-tranche">'
+            f'<div class="check-row check-parent state-{parent_state}">'
+            f'<span class="checkbox state-{parent_state}">{_CHECKLIST_GLYPH[parent_state]}</span>'
+            f'<span class="check-label">{tranche["name"]}</span></div>'
+            f'{children_html}'
+            f'</div>'
+        )
+    return f'<div class="tranche-checklist">{"".join(blocks)}</div>'
 
 
 # ---------------------------------------------------------------------------
@@ -3198,7 +3277,9 @@ def main():
     print(f"  Verdict: {verdict['VERDICT_HEADLINE']} ({verdict['VERDICT_PCT']}%, {verdict['VERDICT_COUNT']} weighted-buy)")
 
     print("Building Capital Deployment Tranches...")
-    values["TRANCHE_STATUS_HTML"] = build_tranche_status(values, cache)
+    tranche_data = _compute_tranche_data(values, cache)
+    values["TRANCHE_CHECKLIST_HTML"] = build_tranche_checklist_html(tranche_data)
+    values["TRANCHE_STATUS_HTML"] = build_tranche_status(values, cache, tranche_data=tranche_data)
 
     print("Checking MVRV-Z / price divergence pattern...")
     divergence_result = detect_mvrv_price_divergence(cache, price_history_dated)
