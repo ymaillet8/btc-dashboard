@@ -2284,6 +2284,32 @@ def _count_bucket(values, tokens):
     return n_buy, n_scored, pct
 
 
+def _render_summary_box(cells, main_pct_display, main_label):
+    """Shared .summary-box > .summary-row > .summary-cell outer markup for
+    both signal summary boxes -- presentational layer only. Cell count and
+    values are entirely the caller's call (4 fractions for Bottom via
+    _count_bucket(), 2 for Top via _count_bucket_top()); this only removes
+    the duplicated HTML shape between the two, not the genuinely separate
+    weight-pool data logic feeding them."""
+    cell_html = "".join(
+        f'''
+        <div class="summary-cell">
+          <div class="summary-frac">{frac}</div>
+          <div class="summary-label">{label}</div>
+          <div class="summary-pct">{pct}%</div>
+        </div>'''
+        for frac, label, pct in cells
+    )
+    return f'''<div class="summary-box">
+      <div class="summary-row">{cell_html}
+        <div class="summary-cell summary-cell-main">
+          <div class="summary-pct-main">{main_pct_display}</div>
+          <div class="summary-label">{main_label}</div>
+        </div>
+      </div>
+    </div>'''
+
+
 def build_signal_summary_html(values):
     """Three fractions (core / self-computed / all weighted indicators)
     plus the actual weight-adjusted percentage, in one compact box. The
@@ -2296,29 +2322,12 @@ def build_signal_summary_html(values):
     weighted_pct = values.get("VERDICT_PCT")
     weighted_pct_display = f"{weighted_pct}%" if weighted_pct is not None else "—"
 
-    return f'''<div class="summary-box">
-      <div class="summary-row">
-        <div class="summary-cell">
-          <div class="summary-frac">{core_buy}/{core_total}</div>
-          <div class="summary-label">Core indicators signaling bottom</div>
-          <div class="summary-pct">{core_pct}%</div>
-        </div>
-        <div class="summary-cell">
-          <div class="summary-frac">{self_buy}/{self_total}</div>
-          <div class="summary-label">Self-computed indicators signaling bottom</div>
-          <div class="summary-pct">{self_pct}%</div>
-        </div>
-        <div class="summary-cell">
-          <div class="summary-frac">{all_buy}/{all_total}</div>
-          <div class="summary-label">All weighted indicators signaling bottom</div>
-          <div class="summary-pct">{all_pct}%</div>
-        </div>
-        <div class="summary-cell summary-cell-main">
-          <div class="summary-pct-main">{weighted_pct_display}</div>
-          <div class="summary-label">\u2693 Actual weighted percentage \u2693</div>
-        </div>
-      </div>
-    </div>'''
+    cells = [
+        (f"{core_buy}/{core_total}", "Core indicators signaling bottom", core_pct),
+        (f"{self_buy}/{self_total}", "Self-computed indicators signaling bottom", self_pct),
+        (f"{all_buy}/{all_total}", "All weighted indicators signaling bottom", all_pct),
+    ]
+    return _render_summary_box(cells, weighted_pct_display, "⚓ Actual weighted percentage ⚓")
 
 
 def _count_bucket_top(values, tokens):
@@ -2338,25 +2347,14 @@ def build_signal_summary_html_top(values):
     has, so a Core/Self-computed split would be an arbitrary categorical
     line with nothing real behind it. One fraction (all weighted
     indicators) plus the main weighted percentage is proportionate to the
-    actual indicator count. Reuses the same .summary-box/.summary-cell CSS
-    already defined for Table 1 -- no new styling needed."""
+    actual indicator count. Shares _render_summary_box() with Table 1's
+    box -- same outer HTML shape, deliberately fewer cells."""
     all_buy, all_total, all_pct = _count_bucket_top(values, tuple(WEIGHT_MAP_TOP.keys()))
     weighted_pct = values.get("VERDICT_PCT_TOP")
-    weighted_pct_display = f"{weighted_pct}%" if weighted_pct is not None else "\u2014"
+    weighted_pct_display = f"{weighted_pct}%" if weighted_pct is not None else "—"
 
-    return f'''<div class="summary-box">
-      <div class="summary-row">
-        <div class="summary-cell">
-          <div class="summary-frac">{all_buy}/{all_total}</div>
-          <div class="summary-label">All weighted indicators signaling top</div>
-          <div class="summary-pct">{all_pct}%</div>
-        </div>
-        <div class="summary-cell summary-cell-main">
-          <div class="summary-pct-main">{weighted_pct_display}</div>
-          <div class="summary-label">\u26a0\ufe0f Actual weighted percentage \u26a0\ufe0f</div>
-        </div>
-      </div>
-    </div>'''
+    cells = [(f"{all_buy}/{all_total}", "All weighted indicators signaling top", all_pct)]
+    return _render_summary_box(cells, weighted_pct_display, "⚠️ Actual weighted percentage ⚠️")
 
 
 def build_verdict(values):
