@@ -393,6 +393,19 @@ def _get_json(url, headers=None, timeout=15):
 # ---------------------------------------------------------------------------
 # 1. BGeometrics — 8 calls, safely under the 8/hour free cap
 # ---------------------------------------------------------------------------
+def _log_bg_rate_limit(slug, headers):
+    """Log BGeometrics' rate-limit headers, if present, for whichever call
+    just ran (success or failure) -- closes the observability gap where we
+    could only ever see a 429 after the fact, never how close to it a
+    healthy run was cutting things."""
+    remaining_hour = headers.get("X-RateLimit-Remaining-Hour")
+    remaining_day = headers.get("X-RateLimit-Remaining-Day")
+    reset_hour = headers.get("X-RateLimit-Reset-Hour")
+    if remaining_hour is not None or remaining_day is not None:
+        print(f"    [{slug}] rate limit: {remaining_hour}/hour remaining, "
+              f"{remaining_day}/day remaining, hour resets in {reset_hour}s")
+
+
 def fetch_bg_latest(slug):
     """Fetch and unwrap the latest value for one metric.
 
@@ -406,11 +419,14 @@ def fetch_bg_latest(slug):
     """
     url = f"{BG_BASE}/{slug}"
     METADATA_KEYS = {"d", "date", "unixts", "unix_ts", "timestamp", "time"}
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "btc-dashboard-bot/1.0",
+        "Authorization": f"Bearer {BG_KEY}",
+    })
     try:
-        data = _get_json(url, headers={
-            "User-Agent": "btc-dashboard-bot/1.0",
-            "Authorization": f"Bearer {BG_KEY}",
-        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            _log_bg_rate_limit(slug, resp.headers)
+            data = json.loads(resp.read().decode())
 
         entry = None
         if isinstance(data, list) and data:
@@ -438,6 +454,7 @@ def fetch_bg_latest(slug):
                 if key.lower() not in METADATA_KEYS:
                     return val
     except urllib.error.HTTPError as e:
+        _log_bg_rate_limit(slug, e.headers)
         print(f"  ! {slug}: HTTP {e.code} — {e.reason}")
     except Exception as e:
         print(f"  ! {slug}: failed — {e}")
