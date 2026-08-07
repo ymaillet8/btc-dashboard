@@ -2702,7 +2702,7 @@ def detect_mvrv_price_divergence(cache, dated_price_history,
         return {
             "available": False,
             "reason": f"only {len(minima)} local price minima identified in the trailing "
-                      f"{lookback_days}d (need 2) — {'not enough price history yet' if not dated_price_history else 'market has not made a clear swing low/low/low pattern yet'}",
+                      f"{lookback_days}d (need 2) — {'not enough price history yet' if not dated_price_history else 'market has not made a clear swing low pattern yet'}",
             "point1": None, "point2": None,
         }
     first_min, second_min = minima[-2], minima[-1]
@@ -2765,6 +2765,138 @@ def build_divergence_card_html(result):
         f'<div class="pattern-card-explainer">{explainer}</div>'
         f'</div>'
     )
+
+
+# Ordinal ranking of build_verdict()'s five fixed VERDICT_HEADLINE strings,
+# used ONLY to compare tiers the verdict already decided -- not a new
+# pct threshold, just naming the ordering those five fixed categories
+# already imply.
+_INDICATOR_TIER_RANK = {
+    "Insufficient data this run": 0,
+    "Minimal confluence": 1,
+    "Partial confluence — early accumulation zone": 2,
+    "Strong confluence forming": 3,
+    "Near-maximal confluence": 4,
+}
+
+
+def build_discussion_extended_html(verdict, tranche_data, divergence_result):
+    """§4 Discussion synthesis -- layers the tranche picture and the
+    divergence picture on top of the indicator picture already summarized
+    by `verdict` (build_verdict()'s return value), then one hedged
+    synthesis paragraph combining all three. Deliberately reuses
+    `tranche_data` exactly as produced by _compute_tranche_data() (the
+    same object build_tranche_status() and build_tranche_checklist_html()
+    consume) and `divergence_result` exactly as produced by
+    detect_mvrv_price_divergence() (the same object
+    build_divergence_card_html() consumes) -- both passed in by the
+    caller rather than recomputed here, so this can never drift out of
+    sync with the §1 table, the §5 panel/checklist, or the divergence
+    card. Introduces no new thresholds: the indicator tier below is just
+    an ordinal ranking of build_verdict()'s own five fixed headline
+    strings, and the tranche verdict comes straight from the shared
+    _tranche_verdict() helper."""
+    # --- Step 2: tranche picture ---
+    tranche_verdicts = []  # (short_name, verdict_text) per tranche, in order
+    for tranche in tranche_data:
+        component_days = [days for _, days in tranche["components"]]
+        verdict_text, _css = _tranche_verdict(component_days)
+        prefix = tranche["name"].split("(")[0].strip()          # "Tranche 1"
+        suffix = tranche["name"].split("—")[-1].strip()          # "Early Movers"
+        tranche_verdicts.append((f"{prefix} ({suffix})", verdict_text))
+
+    tranche_summary = " · ".join(f"<strong>{name}</strong>: {v}" for name, v in tranche_verdicts)
+    early_confirmed = "CONFIRMED" in tranche_verdicts[0][1]
+    core_confirmed = "CONFIRMED" in tranche_verdicts[1][1]
+    allclear_confirmed = "CONFIRMED" in tranche_verdicts[2][1]
+    tranche_lean = core_confirmed or allclear_confirmed
+
+    tranche_para = (
+        f'<strong>2. Tranche picture:</strong> {tranche_summary}. Early movers confirming first is the '
+        f'expected, normal firing order on its own — historically not a strong signal by itself. Core '
+        f'confirmers (MVRV Z-Score, Puell Multiple) confirming is the later, historically stronger signal '
+        f'worth paying more attention to.'
+    )
+
+    # --- Step 3: divergence picture ---
+    divergence_available = bool(divergence_result.get("available"))
+    divergence_detected = divergence_available and bool(divergence_result.get("divergence"))
+    if not divergence_available:
+        divergence_para = (
+            f'<strong>3. Divergence picture:</strong> Not enough data to call yet — '
+            f'{divergence_result.get("reason", "insufficient price/Z-Score history")}.'
+        )
+    elif divergence_detected:
+        divergence_para = (
+            '<strong>3. Divergence picture:</strong> A bullish MVRV-Z / price divergence has been detected — '
+            'price made a lower low while MVRV Z-Score made a higher low, the pattern that preceded the '
+            'actual Nov 2022 bottom.'
+        )
+    else:
+        divergence_para = (
+            '<strong>3. Divergence picture:</strong> No divergence currently detected between price and '
+            'MVRV Z-Score.'
+        )
+
+    # --- Step 4: synthesis -- explicitly hedged, never a declarative
+    # "we are at the bottom" claim, never a date or price target. An
+    # honest "the picture is mixed" is a valid and preferred output when
+    # the three layers don't agree. ---
+    headline = verdict.get("VERDICT_HEADLINE", "Insufficient data this run")
+    indicator_tier = _INDICATOR_TIER_RANK.get(headline, 0)
+    indicator_lean = indicator_tier >= 3  # "Strong confluence forming" or "Near-maximal confluence"
+
+    if indicator_tier == 0:
+        synthesis = (
+            "There isn't enough usable data this run to synthesize a picture — too few indicators returned "
+            "readings to say anything meaningful about where this sits."
+        )
+    else:
+        layers = [
+            ("indicator confluence", indicator_lean),
+            ("tranche confirmation", tranche_lean),
+            ("the MVRV-Z/price divergence pattern", divergence_detected),
+        ]
+        aligned = [label for label, ok in layers if ok]
+        not_aligned = [label for label, ok in layers if not ok]
+
+        def _join_and(items):
+            if len(items) == 1:
+                return items[0]
+            if len(items) == 2:
+                return f"{items[0]} and {items[1]}"
+            return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+        if len(aligned) == 3:
+            synthesis = (
+                f"All three layers here — {_join_and(aligned)} — are currently aligned. Taken together, this "
+                "pattern is most consistent with being at or very near a cycle low, though that's a read on "
+                "the pattern, not a prediction of what happens next or when."
+            )
+        elif len(aligned) == 0:
+            synthesis = (
+                f"None of the three layers here — {_join_and([label for label, _ in layers])} — currently "
+                "support a bottom read. Taken together, this looks more consistent with continued "
+                "consolidation or decline than an emerging low."
+            )
+        else:
+            aligned_verb = "leans" if len(aligned) == 1 else "lean"
+            not_aligned_verb = "does" if len(not_aligned) == 1 else "do"
+            synthesis = (
+                f"{_join_and(aligned)} currently {aligned_verb} toward a bottom, while {_join_and(not_aligned)} "
+                f"{not_aligned_verb} not. Taken together, the picture is mixed right now — this isn't a clean "
+                "read in either direction, and forcing one wouldn't be honest."
+            )
+
+        if not divergence_available:
+            synthesis += (
+                f" (The divergence read itself is unavailable this run — {divergence_result.get('reason', 'insufficient history')} "
+                "— so this leans more heavily on the indicator and tranche layers above.)"
+            )
+
+    synthesis_para = f'<strong>4. Synthesis:</strong> {synthesis}'
+
+    return f'{tranche_para}\n      <br><br>\n      {divergence_para}\n      <br><br>\n      {synthesis_para}'
 
 
 def build_verdict_top(values):
@@ -3286,6 +3418,8 @@ def main():
     divergence_result = detect_mvrv_price_divergence(cache, price_history_dated)
     values["DIVERGENCE_CARD_HTML"] = build_divergence_card_html(divergence_result)
     print(f"  Divergence: {'available, ' + ('DETECTED' if divergence_result.get('divergence') else 'no divergence') if divergence_result['available'] else 'N/A — ' + divergence_result['reason']}")
+
+    values["DISCUSSION_EXTENDED_HTML"] = build_discussion_extended_html(verdict, tranche_data, divergence_result)
 
     # -----------------------------------------------------------------
     # TABLE 3 — Cycle Top Rank & Weight. Phase 2: every indicator computes
