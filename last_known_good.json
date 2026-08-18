@@ -1045,5 +1045,434 @@
       "volume": "779,368"
     },
     "date": "2026-08-17T13:35:08.277163+00:00"
-  }
+  },
+  "VERDICT_HISTORY": [
+    {
+      "date": "2026-06-01",
+      "cycle_bottom_pct": 35.2,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-02",
+      "cycle_bottom_pct": 38.9,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-03",
+      "cycle_bottom_pct": 53.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-04",
+      "cycle_bottom_pct": 53.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-05",
+      "cycle_bottom_pct": 53.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-06",
+      "cycle_bottom_pct": 48.1,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-07",
+      "cycle_bottom_pct": 46.3,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-08",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-09",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-10",
+      "cycle_bottom_pct": 53.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-11",
+      "cycle_bottom_pct": 48.1,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-12",
+      "cycle_bottom_pct": 48.1,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-13",
+      "cycle_bottom_pct": 42.6,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-14",
+      "cycle_bottom_pct": 35.2,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-15",
+      "cycle_bottom_pct": 37.0,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-16",
+      "cycle_bottom_pct": 33.3,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-17",
+      "cycle_bottom_pct": 37.0,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-18",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-19",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-20",
+      "cycle_bottom_pct": 38.9,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-21",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-22",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-23",
+      "cycle_bottom_pct": 37.0,
+      "momentum_shift_pct": 62.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-24",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-25",
+      "cycle_bottom_pct": 46.3,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-26",
+      "cycle_bottom_pct": 46.3,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-27",
+      "cycle_bottom_pct": 50.0,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-28",
+      "cycle_bottom_pct": 46.3,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-29",
+      "cycle_bottom_pct": 46.3,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-06-30",
+      "cycle_bottom_pct": 46.3,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-01",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-02",
+      "cycle_bottom_pct": 48.1,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-03",
+      "cycle_bottom_pct": 48.1,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-04",
+      "cycle_bottom_pct": 42.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-05",
+      "cycle_bottom_pct": 38.9,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-06",
+      "cycle_bottom_pct": 33.3,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-07",
+      "cycle_bottom_pct": 33.3,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-08",
+      "cycle_bottom_pct": 40.7,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-09",
+      "cycle_bottom_pct": 37.0,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-10",
+      "cycle_bottom_pct": 38.9,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-11",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-12",
+      "cycle_bottom_pct": 27.8,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-13",
+      "cycle_bottom_pct": 38.9,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-14",
+      "cycle_bottom_pct": 37.0,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-15",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-16",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-17",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-18",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-19",
+      "cycle_bottom_pct": 27.8,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-20",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-21",
+      "cycle_bottom_pct": 24.1,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-22",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-23",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-24",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-25",
+      "cycle_bottom_pct": 20.4,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-26",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-27",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-28",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-29",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-30",
+      "cycle_bottom_pct": 29.6,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    },
+    {
+      "date": "2026-07-31",
+      "cycle_bottom_pct": 37.0,
+      "momentum_shift_pct": 37.5,
+      "cycle_top_pct": 0.0,
+      "source": "backtest_seed"
+    }
+  ]
 }
