@@ -2426,6 +2426,18 @@ def build_weight_pie_svg(values):
 VERDICT_TREND_COLORS = {"cycle_bottom_pct": "#3ddc9a", "momentum_shift_pct": "#6ba9fa", "cycle_top_pct": "#ff6b6b"}
 VERDICT_TREND_LABELS = {"cycle_bottom_pct": "Cycle Bottom", "momentum_shift_pct": "Momentum Shift", "cycle_top_pct": "Cycle Top"}
 VERDICT_TREND_SERIES = ("cycle_bottom_pct", "momentum_shift_pct", "cycle_top_pct")
+# Staggered per-series marker radius (drawn in VERDICT_TREND_SERIES order,
+# so a later series' marker sits ON TOP of an earlier one at the same
+# pixel) -- deliberately NOT a flat radius. When two series tie on the
+# exact same value (e.g. Momentum Shift and Cycle Top both reading 0.0%,
+# a real recurring case), a flat radius would let the later-drawn circle
+# fully hide the earlier one. Bigger-drawn-first means a tied earlier
+# series' color still shows as a visible ring around the smaller one on
+# top -- a genuine concentric-rings display, not just a bigger dot. Also
+# larger across the board than the original flat 2.4 (a lone point in an
+# otherwise-empty month was too easy to mistake for nothing there).
+VERDICT_TREND_MARKER_RADIUS = {"cycle_bottom_pct": 5.0, "momentum_shift_pct": 3.8, "cycle_top_pct": 2.8}
+VERDICT_TREND_MARKER_STROKE = "#0a0c10"  # matches --bg -- same cutout-ring technique build_weight_pie_svg() already uses (stroke:var(--bg)) to keep adjacent/overlapping shapes visually separated
 _MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August",
                 "September", "October", "November", "December")
 
@@ -2469,9 +2481,14 @@ def _verdict_trend_month_svg(year, month, day_values):
     svg.append(f'<line x1="{left}" y1="{height-bottom:.1f}" x2="{width-right}" y2="{height-bottom:.1f}" '
                 f'stroke="#242a33" stroke-width="1"/>')
 
-    # Three series: broken-path line + small markers at each real reading
+    # Three series: broken-path line + small markers at each real reading.
+    # Markers use a staggered radius + a thin background-colored stroke
+    # (VERDICT_TREND_MARKER_RADIUS/_STROKE above) so two series tied on the
+    # exact same value stay visually distinguishable as concentric rings,
+    # rather than the later-drawn one fully hiding the earlier one.
     for series_key in VERDICT_TREND_SERIES:
         color = VERDICT_TREND_COLORS[series_key]
+        radius = VERDICT_TREND_MARKER_RADIUS[series_key]
         d_parts, markers = [], []
         pen_down = False
         for day in range(1, days_in_month + 1):
@@ -2481,7 +2498,8 @@ def _verdict_trend_month_svg(year, month, day_values):
                 continue
             px, py = x_of(day), y_of(v)
             d_parts.append(f"{'L' if pen_down else 'M'} {px:.1f} {py:.1f}")
-            markers.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="2.4" fill="{color}"><title>'
+            markers.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="{radius}" fill="{color}" '
+                            f'stroke="{VERDICT_TREND_MARKER_STROKE}" stroke-width="1"><title>'
                             f'{_MONTH_NAMES[month-1]} {day}: {VERDICT_TREND_LABELS[series_key]} {v}%</title></circle>')
             pen_down = True
         if d_parts:
