@@ -53,6 +53,7 @@ endpoint to the last 4 years, and confirmed on real data that a 4-year-only
 window breaks the regression (produces a negative slope). See the longer
 note above fetch_active_addresses_full_history() below.
 """
+import calendar
 import json
 import math
 import os
@@ -208,6 +209,45 @@ def history_append(cache, key, value, date=None):
     entry["values"] = entry["values"][-max_len:]
     entry["dates"] = entry["dates"][-max_len:]
     cache[hist_key] = entry
+
+
+# ---------------------------------------------------------------------------
+# Persistent weighted-verdict history — cache["VERDICT_HISTORY"], a plain
+# list of {date, cycle_bottom_pct, momentum_shift_pct, cycle_top_pct,
+# source} dicts, one per calendar day, that main() appends its own genuine
+# VERDICT_PCT/VERDICT_PCT_MOM/VERDICT_PCT_TOP to on every real run. Feeds
+# build_verdict_trend_html()'s monthly SVG chart.
+# ---------------------------------------------------------------------------
+def verdict_history_append(cache, entry_date, cycle_bottom_pct, momentum_shift_pct, cycle_top_pct, source="live"):
+    """Appends one day's three weighted-verdict percentages to
+    cache["VERDICT_HISTORY"]. Same same-day-replace dedup discipline as
+    history_append() above (a second call for the same calendar day
+    replaces that day's entry instead of adding a duplicate — e.g. a
+    manual workflow_dispatch rerun on a day the scheduled run already
+    covered) — the identical PATTERN, deliberately not the same function,
+    since VERDICT_HISTORY's shape (one dict per day, three percentages +
+    provenance) doesn't fit history_append()'s parallel values/dates-lists
+    shape (one float per day, single series).
+
+    `cycle_bottom_pct`/`momentum_shift_pct`/`cycle_top_pct` accept a real
+    float, or None if that table had insufficient data to produce a
+    verdict that day (mirrors VERDICT_PCT's own "—" fallback) — never
+    fabricated. `source` is "live" for a genuine daily run's own real
+    VERDICT_PCT/_TOP/_MOM values, or "backtest_seed" for the one-time
+    historical backfill from backtest_indicators.py's walk-forward daily
+    matrix — kept as real provenance in the stored data even though the
+    chart itself doesn't visually distinguish the two."""
+    history = cache.setdefault("VERDICT_HISTORY", [])
+    day = entry_date.isoformat() if hasattr(entry_date, "isoformat") else str(entry_date)
+    entry = {
+        "date": day, "cycle_bottom_pct": cycle_bottom_pct,
+        "momentum_shift_pct": momentum_shift_pct, "cycle_top_pct": cycle_top_pct,
+        "source": source,
+    }
+    if history and history[-1].get("date") == day:
+        history[-1] = entry
+    else:
+        history.append(entry)
 
 
 def compute_percentile(values, pct):
@@ -2374,6 +2414,161 @@ def build_weight_pie_svg(values):
     return f'<svg viewBox="0 0 300 300" width="260" height="260">{"".join(paths)}{center_text}</svg>'
 
 
+# ---------------------------------------------------------------------------
+# Persistent weighted-verdict trend chart — one self-contained SVG line-
+# chart panel per calendar month found in cache["VERDICT_HISTORY"], wrapped
+# in a click-through Previous/Next navigator (the page's first and only use
+# of JavaScript, kept deliberately minimal: pure show/hide + button
+# disabling, no framework, no external library). New months get their own
+# panel automatically the first time an entry for that month appears in
+# VERDICT_HISTORY — nothing here is hardcoded to June/July.
+# ---------------------------------------------------------------------------
+VERDICT_TREND_COLORS = {"cycle_bottom_pct": "#3ddc9a", "momentum_shift_pct": "#6ba9fa", "cycle_top_pct": "#ff6b6b"}
+VERDICT_TREND_LABELS = {"cycle_bottom_pct": "Cycle Bottom", "momentum_shift_pct": "Momentum Shift", "cycle_top_pct": "Cycle Top"}
+VERDICT_TREND_SERIES = ("cycle_bottom_pct", "momentum_shift_pct", "cycle_top_pct")
+_MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August",
+                "September", "October", "November", "December")
+
+
+def _verdict_trend_month_svg(year, month, day_values):
+    """One month's complete, self-contained chart: 0-100% y-axis with
+    gridlines, day-of-month x-axis (1..days_in_month, whatever that month
+    actually has), three polylines (one per VERDICT_TREND_SERIES) built as
+    an SVG <path> so a day with no reading (None — insufficient data, not
+    fabricated) breaks the line into separate segments (a moveto) instead
+    of interpolating across the gap or crashing."""
+    days_in_month = calendar.monthrange(year, month)[1]
+    width, height = 700, 300
+    left, right, top, bottom = 46, 16, 18, 34
+    plot_w, plot_h = width - left - right, height - top - bottom
+
+    def x_of(day):
+        if days_in_month <= 1:
+            return left + plot_w / 2
+        return left + (day - 1) / (days_in_month - 1) * plot_w
+
+    def y_of(pct):
+        return top + (100 - pct) / 100 * plot_h
+
+    svg = [f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" '
+           f'aria-label="Weighted verdict trend, {_MONTH_NAMES[month-1]} {year}">']
+
+    # Gridlines + y-axis labels (0/25/50/75/100%)
+    for pct in (0, 25, 50, 75, 100):
+        gy = y_of(pct)
+        svg.append(f'<line x1="{left}" y1="{gy:.1f}" x2="{width-right}" y2="{gy:.1f}" '
+                    f'stroke="#242a33" stroke-width="1"/>')
+        svg.append(f'<text x="{left-8}" y="{gy+4:.1f}" text-anchor="end" font-size="10" fill="#636e80">{pct}%</text>')
+
+    # X-axis day ticks: day 1, every 5th day, and the last day of the month
+    tick_days = sorted(set([1] + list(range(5, days_in_month, 5)) + [days_in_month]))
+    for d in tick_days:
+        tx = x_of(d)
+        svg.append(f'<text x="{tx:.1f}" y="{height-bottom+16}" text-anchor="middle" font-size="10" '
+                    f'fill="#636e80">{d}</text>')
+    svg.append(f'<line x1="{left}" y1="{height-bottom:.1f}" x2="{width-right}" y2="{height-bottom:.1f}" '
+                f'stroke="#242a33" stroke-width="1"/>')
+
+    # Three series: broken-path line + small markers at each real reading
+    for series_key in VERDICT_TREND_SERIES:
+        color = VERDICT_TREND_COLORS[series_key]
+        d_parts, markers = [], []
+        pen_down = False
+        for day in range(1, days_in_month + 1):
+            v = day_values.get(day, {}).get(series_key)
+            if v is None:
+                pen_down = False
+                continue
+            px, py = x_of(day), y_of(v)
+            d_parts.append(f"{'L' if pen_down else 'M'} {px:.1f} {py:.1f}")
+            markers.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="2.4" fill="{color}"><title>'
+                            f'{_MONTH_NAMES[month-1]} {day}: {VERDICT_TREND_LABELS[series_key]} {v}%</title></circle>')
+            pen_down = True
+        if d_parts:
+            svg.append(f'<path d="{" ".join(d_parts)}" fill="none" stroke="{color}" stroke-width="2" '
+                        f'stroke-linejoin="round" stroke-linecap="round"/>')
+        svg.extend(markers)
+
+    svg.append("</svg>")
+    return "".join(svg)
+
+
+def build_verdict_trend_html(cache):
+    """Groups cache["VERDICT_HISTORY"] by calendar month and renders one
+    click-through panel per month (see _verdict_trend_month_svg() for a
+    single panel), wrapped in Previous/Next navigation. Defaults to
+    showing the MOST RECENT month with data (so a freshly-started August
+    panel with just a few real days shows first, not June). Entirely
+    self-contained: the only <script> tag this page has, deliberately
+    minimal (show/hide one panel at a time + disable the boundary button —
+    no framework, no external library, matching how sparingly JS is used
+    everywhere else on this page, which is to say not at all until now)."""
+    history = cache.get("VERDICT_HISTORY", [])
+    if not history:
+        return '<div class="verdict-trend-empty">No verdict history accumulated yet — this fills in day by day.</div>'
+
+    months = {}  # "YYYY-MM" -> {day_of_month: {series_key: pct}}
+    for entry in sorted(history, key=lambda e: e.get("date", "")):
+        d_str = entry.get("date")
+        if not d_str:
+            continue
+        try:
+            y, m, day = int(d_str[0:4]), int(d_str[5:7]), int(d_str[8:10])
+        except (ValueError, IndexError):
+            continue
+        month_key = f"{y:04d}-{m:02d}"
+        months.setdefault(month_key, {})[day] = {k: entry.get(k) for k in VERDICT_TREND_SERIES}
+
+    month_keys = sorted(months.keys())  # chronological, earliest first
+    panels = []
+    for i, month_key in enumerate(month_keys):
+        y, m = int(month_key[0:4]), int(month_key[5:7])
+        svg = _verdict_trend_month_svg(y, m, months[month_key])
+        display = "block" if i == len(month_keys) - 1 else "none"  # default: most recent month
+        panels.append(
+            f'<div class="verdict-month-panel" id="verdict-panel-{i}" style="display:{display};" '
+            f'data-label="{_MONTH_NAMES[m-1]} {y}">{svg}</div>'
+        )
+
+    legend = "".join(
+        f'<span class="verdict-legend-item"><span class="verdict-legend-dot" '
+        f'style="background:{VERDICT_TREND_COLORS[k]};"></span>{VERDICT_TREND_LABELS[k]}</span>'
+        for k in VERDICT_TREND_SERIES
+    )
+    last_i = len(month_keys) - 1
+    initial_label = f"{_MONTH_NAMES[int(month_keys[-1][5:7])-1]} {month_keys[-1][0:4]}"
+
+    return f'''<div class="verdict-trend">
+      <div class="verdict-nav">
+        <button type="button" id="verdict-prev" onclick="verdictTrendNav(-1)" {"disabled" if last_i <= 0 else ""}>◀ Previous Month</button>
+        <span class="verdict-month-label" id="verdict-month-label">{initial_label}</span>
+        <button type="button" id="verdict-next" onclick="verdictTrendNav(1)" disabled>Next Month ▶</button>
+      </div>
+      <div class="verdict-panels">{"".join(panels)}</div>
+      <div class="verdict-legend">{legend}</div>
+      <script>
+        var verdictTrendIndex = {last_i};
+        var verdictTrendCount = {len(month_keys)};
+        function verdictTrendShow(i) {{
+          for (var j = 0; j < verdictTrendCount; j++) {{
+            var panel = document.getElementById('verdict-panel-' + j);
+            if (panel) {{ panel.style.display = (j === i) ? 'block' : 'none'; }}
+          }}
+          var current = document.getElementById('verdict-panel-' + i);
+          document.getElementById('verdict-month-label').textContent = current ? current.getAttribute('data-label') : '';
+          document.getElementById('verdict-prev').disabled = (i <= 0);
+          document.getElementById('verdict-next').disabled = (i >= verdictTrendCount - 1);
+        }}
+        function verdictTrendNav(delta) {{
+          var next = verdictTrendIndex + delta;
+          if (next < 0 || next >= verdictTrendCount) return;
+          verdictTrendIndex = next;
+          verdictTrendShow(verdictTrendIndex);
+        }}
+      </script>
+    </div>'''
+
+
 def build_weight_pie_svg_top(values):
     """Table 3's own pie chart -- same slice-boundary math as
     build_weight_pie_svg() above (same running-total approach, same
@@ -4117,6 +4312,25 @@ def main():
     values.update(verdict_top)
     values["SIGNAL_SUMMARY_BOX_TOP"] = build_signal_summary_html_top(values)
     print(f"  Table 3 Verdict: {verdict_top['VERDICT_HEADLINE_TOP']} ({verdict_top['VERDICT_PCT_TOP']}%, {verdict_top['VERDICT_COUNT_TOP']} weighted-top)")
+
+    # Persistent weighted-verdict history -- append today's three genuine
+    # live percentages (never a reconstruction) using the exact same
+    # same-day-replace dedup discipline history_append() uses everywhere
+    # else. VERDICT_PCT/_MOM/_TOP are each either a real float or the
+    # string "—" (build_verdict()'s own "insufficient data" fallback) --
+    # normalized to None here rather than storing the placeholder string.
+    def _numeric_or_none(v):
+        return v if isinstance(v, (int, float)) else None
+    print("Appending today's weighted verdicts to the persistent VERDICT_HISTORY trend...")
+    verdict_history_append(
+        cache, datetime.now(timezone.utc).date(),
+        _numeric_or_none(verdict.get("VERDICT_PCT")),
+        _numeric_or_none(verdict_mom.get("VERDICT_PCT_MOM")),
+        _numeric_or_none(verdict_top.get("VERDICT_PCT_TOP")),
+        source="live",
+    )
+    values["VERDICT_TREND_HTML"] = build_verdict_trend_html(cache)
+    print(f"  VERDICT_HISTORY now has {len(cache.get('VERDICT_HISTORY', []))} days of accumulated data")
 
     with open("dashboard_template.html", "r", encoding="utf-8") as f:
         html = f.read()
