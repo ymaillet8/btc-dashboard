@@ -384,7 +384,7 @@ def get_mvrv_momentum_ma(cache, window_days=MVRV_MOMENTUM_WINDOW_DAYS,
 # deceleration event (Nov 2025-Feb 2026) vs. ~37% during the flat bottom
 # period that followed (Mar-Aug 2026) -- down from the OLD level-only
 # formula's ~100% in both, which is the actual bug being fixed. 30 days
-# matches the lookback you suggested as a starting point; shorter lookbacks
+# was the starting-point lookback and held up; shorter lookbacks
 # (14-21d) gave a smaller gap between the two regimes, longer ones (45-90d)
 # let the comparison point drift back into the still-elevated pre-flattening
 # period and made March-August fire MORE often, not less -- so 30d was the
