@@ -57,6 +57,7 @@ import calendar
 import json
 import math
 import os
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone, date, timedelta
@@ -756,6 +757,120 @@ def _get_json(url, headers=None, timeout=15):
     req = urllib.request.Request(url, headers=headers or {"User-Agent": "btc-dashboard-bot/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
+
+
+# ---------------------------------------------------------------------------
+# Coin Metrics Community "fresh cross-check" -- SHADOW MODE. Display only.
+# Independent, keyless, ~1-day-fresh derivation of MVRV Z, Puell and Realized Price, shown
+# as a small caption next to the BGeometrics reading. It is NEVER scored, never written to
+# any *_history array or the cache, never used by a verdict/tier/tranche/divergence, and
+# never substituted for (or used as a fallback for) the BGeometrics reading, in either
+# direction. Any failure -> "cross-check unavailable".
+# Coin Metrics free tier has no CapRealUSD, so: realized cap = market cap / MVRV;
+# Z = (market cap - realized cap) / expanding population std of market cap (BGeometrics'
+# own definition, window unstated; expanding reproduces their 2026 values); realized price =
+# realized cap / supply; Puell = daily issuance USD / mean of trailing 365 days incl. today.
+# ---------------------------------------------------------------------------
+CM_BASE = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+CM_METRICS = ("CapMVRVCur", "CapMrktCurUSD", "IssTotUSD", "SplyCur")
+CM_MAX_PAGES = 6                 # budget: at most ~6 requests per run
+CM_PAGE_GAP_SECONDS = 0.7        # free tier: 10 requests / 6 seconds
+CM_MAX_AGE_DAYS = 3              # latest row older than this -> unavailable (stale)
+CM_TOKENS = ("MVRV_Z", "PUELL", "REALIZED_PRICE")
+CM_ATTRIBUTION = (
+    'Cross-check data: Coin Metrics Community Data, licensed '
+    '<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank">CC BY-NC 4.0</a>'
+    ' (non-commercial; source: coinmetrics.io). Values shown are derived and modified by this dashboard.'
+)
+
+
+def fetch_coinmetrics_rows():
+    """Paged daily BTC history for CM_METRICS. Raises on any failure (caller degrades)."""
+    url = f"{CM_BASE}?assets=btc&metrics={','.join(CM_METRICS)}&frequency=1d&page_size=10000"
+    rows = []
+    for page in range(CM_MAX_PAGES):
+        data = _get_json(url, headers={"User-Agent": "btc-dashboard-bot/1.0"}, timeout=30)
+        if not isinstance(data, dict) or not isinstance(data.get("data"), list):
+            raise ValueError("malformed Coin Metrics response")
+        rows.extend(data["data"])
+        url = data.get("next_page_url")
+        if not url:
+            return rows
+        time.sleep(CM_PAGE_GAP_SECONDS)
+    raise ValueError("Coin Metrics history exceeded page budget")
+
+
+def derive_coinmetrics_crosscheck(rows, run_date=None):
+    """rows -> {"MVRV_Z": (value, "YYYY-MM-DD"), "PUELL": ..., "REALIZED_PRICE": ...}
+    or raises ValueError('reason') -- missing metric, malformed rows, or stale latest date."""
+    run_date = run_date or run_date_utc()
+    recs = []
+    for r in rows:
+        try:
+            d = date.fromisoformat(str(r["time"])[:10])
+            recs.append((d, {k: (float(r[k]) if r.get(k) not in (None, "") else None) for k in CM_METRICS}))
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("malformed Coin Metrics row")
+    recs.sort(key=lambda t: t[0])
+    if not recs:
+        raise ValueError("no rows")
+    latest = recs[-1][0]
+    age = (run_date - latest).days
+    if age > CM_MAX_AGE_DAYS:
+        raise ValueError(f"stale: latest row {latest} is {age} days old")
+    # Z / realized price from days that have market cap, MVRV and supply
+    n = sx = sx2 = 0.0
+    z = rp = None
+    z_date = None
+    for d, m in recs:
+        mc, mv, sp = m["CapMrktCurUSD"], m["CapMVRVCur"], m["SplyCur"]
+        if mc is None or not mv or not sp:
+            continue
+        n += 1
+        sx += mc
+        sx2 += mc * mc
+        if d == latest:
+            rc = mc / mv
+            sd = math.sqrt(max((sx2 - sx * sx / n) / n, 0.0))
+            if n < 30 or not sd:
+                raise ValueError("insufficient history for Z")
+            z, rp, z_date = (mc - rc) / sd, rc / sp, d
+    if z is None:
+        raise ValueError(f"latest row {latest} lacks MVRV/market cap/supply")
+    # Puell on the latest day: needs 365 consecutive daily issuance values
+    iss = {d: m["IssTotUSD"] for d, m in recs if m["IssTotUSD"] is not None}
+    window = [iss.get(latest - timedelta(days=i)) for i in range(365)]
+    if any(v is None for v in window):
+        raise ValueError("Puell: issuance history incomplete")
+    puell = window[0] / (sum(window) / 365)
+    return {"MVRV_Z": (round(z, 3), z_date.isoformat()),
+            "PUELL": (round(puell, 3), latest.isoformat()),
+            "REALIZED_PRICE": (round(rp), z_date.isoformat())}
+
+
+def crosscheck_caption_html(values, token):
+    """Informational caption under a reading; empty for tokens without a cross-check."""
+    if token not in CM_TOKENS or "CM_XCHECK_STATE" not in values:
+        return ""
+    if values["CM_XCHECK_STATE"] != "ok" or values.get("CM_XCHECK", {}).get(token) is None:
+        return '<div class="xcheck">derived from Coin Metrics data: unavailable</div>'
+    v, asof = values["CM_XCHECK"][token]
+    shown = f"${v:,.0f}" if token == "REALIZED_PRICE" else f"{v:.2f}"
+    return f'<div class="xcheck">derived from Coin Metrics data (as of {asof}): {shown} <span class="xcheck-tag">informational, not scored</span></div>'
+
+
+def run_coinmetrics_crosscheck(values, run_date=None):
+    """Fetch + derive; never raises. Writes values["CM_XCHECK_STATE"] ('ok'|'unavailable'),
+    values["CM_XCHECK"] and values["CM_ATTRIBUTION"] (only shown when something is displayed)."""
+    try:
+        res = derive_coinmetrics_crosscheck(fetch_coinmetrics_rows(), run_date)
+        values["CM_XCHECK_STATE"], values["CM_XCHECK"] = "ok", res
+        print("  Coin Metrics cross-check: " + ", ".join(f"{k}={v[0]} ({v[1]})" for k, v in res.items()))
+    except Exception as e:                                   # timeout, 429, bad JSON, stale, ...
+        values["CM_XCHECK_STATE"], values["CM_XCHECK"] = "unavailable", {}
+        print(f"  Coin Metrics cross-check unavailable: {e}")
+    values["CM_ATTRIBUTION"] = (f'<div class="manual-line">{CM_ATTRIBUTION}</div>'
+                                if values["CM_XCHECK_STATE"] == "ok" else "")
 
 
 # ---------------------------------------------------------------------------
@@ -2374,7 +2489,7 @@ def build_full_weighted_breakdown(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "\u2014" if reading_val is None else reading_val
-        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}{crosscheck_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -2491,7 +2606,7 @@ def build_full_weighted_breakdown_top(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "—" if reading_val is None else reading_val
-        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}{crosscheck_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -3677,7 +3792,7 @@ def build_full_weighted_breakdown_momentum(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "—" if reading_val is None else reading_val
-        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}{crosscheck_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -3915,6 +4030,8 @@ def main():
     # here, before the PERCENTILE_ELIGIBLE loop below, so it can join that
     # same generic rolling-percentile/WEIGHT_MAP machinery Thermocap and
     # NRPL already use — no separate mechanism needed.
+    print("Fetching Coin Metrics Community cross-check (display only, keyless)...")
+    run_coinmetrics_crosscheck(values)
     print("Fetching full Active Addresses history (BGeometrics chart data, unmetered)...")
     aa_points = fetch_active_addresses_full_history()
     if aa_points:
