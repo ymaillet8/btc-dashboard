@@ -287,8 +287,32 @@ support yet.
 
 **(b) Alternatives are not clean either.** A 1460-day (4-year) window loses the Nov 2022 low from Nov 2026 onward, so its threshold drifts upward. A full-history percentile (about -0.15) behaves like the fixed <= 0.0 line on all three lows (fires at Dec 2018 and Nov 2022, not at Jul 2026, where Z was +0.18). Every figure rests on three independent lows.
 
-**(c) Decision pending.** Window and percentile must be decided before the 365-day gate opens. Until then the fixed <= 0.0 threshold stays in force.
+**(c) Decision pending.** Window and percentile must be decided before `MVRV_ADAPTIVE_THRESHOLD_ACTIVE` is switched on (see "Coin Metrics scoring migration" below; the Coin Metrics history already satisfies the 365-day gate, so the flag, not the data, is what keeps the fixed <= 0.0 threshold in force).
 
 **(d) BGeometrics free-tier lag.** Since about 11 Sep 2026 the free tier's on-chain readings have been about 7 days old (about 1 day before that). Each reading now carries an "as of YYYY-MM-DD (N days old)" caption, and a banner appears when any series is more than 2 days old. A display-only "derived from Coin Metrics data" caption on MVRV Z-Score, Puell and Realized Price gives a roughly 1-day-fresh comparison; it is not scored and never replaces the BGeometrics reading.
 
 **(e) Coin Metrics licence.** Coin Metrics Community data is licensed CC BY-NC 4.0 (non-commercial, attribution required). The values shown are derived and modified by this dashboard, and the footer says so. Use is personal and non-commercial only.
+
+## Coin Metrics scoring migration (Nov 2026)
+
+**Why.** Since about 11 Sep 2026 the free BGeometrics tier has served MVRV Z-Score, Puell and Realized Price about 7 days late. The scoring inputs for those three now come from Coin Metrics Community data (about 1 day old: yesterday's complete UTC day). The page labels each reading "as of YYYY-MM-DD (N days old) - Coin Metrics-derived".
+
+**What is derived.** One keyless request per run for full daily history (`CapMVRVCur`, `CapMrktCurUSD`, `IssTotUSD`, `SplyCur`). The free tier has no realized cap, so: realized cap = market cap / MVRV; Z = (market cap - realized cap) / expanding population std of market cap; Realized Price = realized cap / supply; Puell = daily issuance (USD) / mean of the trailing 365 days including today. Validated against the stored dashboard readings (Z within 0.02 at a 7-day lag; Puell about 0.7%, Realized Price about 0.6% mean difference).
+
+**Separate arrays, never mixed.** Coin Metrics values live in their own history arrays (`MVRV_Z_CM__history` kept to 730 points, `PUELL_CM__history` and `REALIZED_PRICE_CM__history` to the generic 200), rebuilt from the freshly fetched series every run with true data dates. The old BGeometrics arrays stay as they were: `PUELL__history` and `REALIZED_PRICE__history` are frozen; `MVRV_Z__history` keeps accumulating the BGeometrics Z as a background cross-check. The BGeometrics Z is shown as a small secondary caption, informational, not scored. Tranche day counts, leeway bands, Table 3 percentile thresholds, MVRV Momentum and the divergence card all read the Coin Metrics arrays.
+
+**Failure handling.** If the Coin Metrics fetch fails or its latest row is more than 3 days old, the cached Coin Metrics reading is shown labelled STALE with its data date and is excluded from the verdict like any STALE reading; with no cache the row shows "no reading today". There is never a fallback to BGeometrics for scoring, in either direction.
+
+**Two flags, both False (in `update_dashboard.py`).**
+- `MVRV_ADAPTIVE_THRESHOLD_ACTIVE = False`: the fixed `<= 0.0` MVRV threshold stays in force for scoring and tranches. Coin Metrics gives 730 days of history, so the adaptive gate would open immediately, and with the 730-day / 7.5th-percentile setting it would fire on a Z of about 0.33 while Z read -0.49 (Dec 2018) and -0.36 (Nov 2022) at past lows (see Known limitations). It is not switched on until the window and percentile are decided.
+- `MVRV_MOMENTUM_LIVE = False`: MVRV Momentum is not added to `WEIGHT_MAP_MOMENTUM`; the row is display only and labelled "SHADOW, NOT SCORED (would be: ...)".
+
+**Shadow log.** Every run computes, from the in-memory Coin Metrics series (trailing data only), the adaptive MVRV thresholds for 730-day, 1460-day and full-history windows at the 7.5th percentile, plus the would-be statuses and the MVRV Momentum would-be status, and appends one dated entry to `SHADOW_LOG` in `last_known_good.json` (same-day reruns replace the entry; last 400 kept). A one-line caption under the MVRV Z row shows the 1460-day result. Nothing reads the log for scoring.
+
+**Source break in `VERDICT_HISTORY`.** No existing row is rewritten. New rows carry an optional `data_source: "cm-2026-11"` field; the first row with it marks the switch (before it, the three inputs were about 7 days stale). The trend chart reads only its known series keys, so the extra field is ignored.
+
+**BGeometrics calls per run.** 10 down to 8: `mvrv-zscore` (cross-check only), `reserve-risk`, `thermocap-multiple`, `lth-sopr`, `nrpl-btc`, `supply-profit`, `sopr`, `pi-cycle`. Puell and Realized Price are no longer fetched.
+
+**Still on BGeometrics, with age captions.** LTH-SOPR, aSOPR (from SOPR) and NRPL: no free source fresher than the BGeometrics free tier was found (Nov 2026); readings can be up to about 7 days old, see the age caption (each carries a tooltip line saying so). Thermocap, Reserve Risk, Supply-in-Loss, Pi Cycle and Active Addresses are unchanged (about 1 day old).
+
+**Licence.** Coin Metrics Community data is CC BY-NC 4.0 (non-commercial, attribution required, changes must be indicated); the footer states the source and that values are derived and modified by this dashboard. If the dashboard ever becomes commercial, this source must be replaced.
