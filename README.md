@@ -280,3 +280,15 @@ above), so this will realistically read N/A for months. It reports exactly
 why it's N/A (how many local minima it found, how sparse the matching
 Z-Score history is) rather than guessing at a result it can't actually
 support yet.
+
+## Known limitations and pending decisions
+
+**(a) MVRV adaptive threshold: window too short.** The adaptive MVRV Z-Score threshold activates only once 365 days of BGeometrics-seeded history exist (about Aug 2027; 105 days on 15 Nov 2026), with a 730-point cap. A Coin Metrics-derived replay (walk-forward, 3 independent lows) shows the 730-day window gives a threshold near +0.36, fires on about 5.7% of "not near a bottom" days (vs 0.8% for longer windows), and fires today at Z ~0.33, while Z read -0.49 (Dec 2018) and -0.36 (Nov 2022) at past cycle lows.
+
+**(b) Alternatives are not clean either.** A 1460-day (4-year) window loses the Nov 2022 low from Nov 2026 onward, so its threshold drifts upward. A full-history percentile (about -0.15) behaves like the fixed <= 0.0 line on all three lows (fires at Dec 2018 and Nov 2022, not at Jul 2026, where Z was +0.18). Every figure rests on three independent lows.
+
+**(c) Decision pending.** Window and percentile must be decided before the 365-day gate opens. Until then the fixed <= 0.0 threshold stays in force.
+
+**(d) BGeometrics free-tier lag.** Since about 11 Sep 2026 the free tier's on-chain readings have been about 7 days old (about 1 day before that). Each reading now carries an "as of YYYY-MM-DD (N days old)" caption, and a banner appears when any series is more than 2 days old. A display-only "derived from Coin Metrics data" caption on MVRV Z-Score, Puell and Realized Price gives a roughly 1-day-fresh comparison; it is not scored and never replaces the BGeometrics reading.
+
+**(e) Coin Metrics licence.** Coin Metrics Community data is licensed CC BY-NC 4.0 (non-commercial, attribution required). The values shown are derived and modified by this dashboard, and the footer says so. Use is personal and non-commercial only.
