@@ -359,6 +359,93 @@ def get_mvrv_momentum_ma(cache, window_days=MVRV_MOMENTUM_WINDOW_DAYS,
     return sum(window) / len(window), n
 
 
+# MVRV Momentum's rate-of-change gate -- added after Finding 2 (real-data
+# investigation, Aug 2026) confirmed the level condition above (Z below its
+# own 365d MA) fires CONTINUOUSLY through an extended bear/bottom regime,
+# long after the actual deceleration event it's meant to catch has passed:
+# a 312-day streak (Oct 2025-Aug 2026) even though Z-Score sat flat with no
+# further decline from March 2026 onward. Table 2's own stated job is a
+# LEADING signal "while price is still rising" -- a reading that's simply
+# LOW relative to a slow trailing average is a different regime than one
+# that's actively decelerating, and the level condition alone can't tell
+# them apart. This adds a second, independent condition: is Z-Score's own
+# SHORT-TERM trend still falling, not just its absolute level low.
+#
+# Deliberately a trailing SHORT_WINDOW-day average today vs. the same
+# SHORT_WINDOW-day average LOOKBACK_DAYS ago -- not a bare single-day
+# point-to-point comparison. Empirically tested against real MVRV Z-Score
+# data (June 2022-Aug 2026) before picking these two numbers: a raw
+# point-to-point comparison is noisy enough to flicker on/off inside a
+# genuinely flat regime (MVRV_Z itself wanders ~0.2-0.8 with no real trend
+# for months at a time). Averaging on both ends cancels day-to-day noise
+# while staying short enough to track a real multi-week shift. Of the
+# window/lookback pairs tested, 10-day short average / 30-day lookback gave
+# the cleanest separation: ~84% of days fire during the confirmed real
+# deceleration event (Nov 2025-Feb 2026) vs. ~37% during the flat bottom
+# period that followed (Mar-Aug 2026) -- down from the OLD level-only
+# formula's ~100% in both, which is the actual bug being fixed. 30 days
+# matches the lookback you suggested as a starting point; shorter lookbacks
+# (14-21d) gave a smaller gap between the two regimes, longer ones (45-90d)
+# let the comparison point drift back into the still-elevated pre-flattening
+# period and made March-August fire MORE often, not less -- so 30d was the
+# empirical sweet spot, not an arbitrary pick.
+MVRV_MOMENTUM_TREND_SHORT_WINDOW_DAYS = 10
+MVRV_MOMENTUM_TREND_LOOKBACK_DAYS = 30
+
+
+def get_mvrv_momentum_trend(cache, short_window=MVRV_MOMENTUM_TREND_SHORT_WINDOW_DAYS,
+                             lookback_days=MVRV_MOMENTUM_TREND_LOOKBACK_DAYS):
+    """Returns (is_falling, today_avg, past_avg, n_points), or
+    (None, None, None, n_points) below the bootstrap gate (needs
+    short_window + lookback_days of accumulated history -- always
+    satisfied well before get_mvrv_momentum_ma()'s own 365-day gate opens,
+    so this never becomes the binding constraint in practice). Reads the
+    same "MVRV_Z__history" cache -- zero extra API cost, zero new series."""
+    values = cache.get("MVRV_Z__history", {}).get("values", [])
+    n = len(values)
+    min_needed = short_window + lookback_days
+    if n < min_needed:
+        return None, None, None, n
+    today_avg = sum(values[-short_window:]) / short_window
+    past_segment = values[-(short_window + lookback_days):-lookback_days]
+    past_avg = sum(past_segment) / len(past_segment)
+    return today_avg < past_avg, today_avg, past_avg, n
+
+
+def classify_mvrv_momentum(cache, mvrv_val):
+    """Table 2's real MVRV Momentum status -- fires (buy-favorable) only
+    when BOTH hold: (a) current MVRV Z-Score sits below its own trailing
+    365-day MA (get_mvrv_momentum_ma(), the original level condition,
+    UNCHANGED), AND (b) MVRV Z-Score's own short-term trend is still
+    genuinely falling (get_mvrv_momentum_trend(), new -- see that
+    function's own docstring for the Finding 2 reasoning and the empirical
+    window choice). (a) alone is necessary but not sufficient.
+
+    Single shared function so main() and backtest_indicators.py's
+    walk-forward reconstruction can't drift from each other -- both call
+    this, neither reimplements the AND-gate separately.
+
+    Returns (label, css, ma, ma_n, today_avg, past_avg). today_avg/
+    past_avg are None whenever the trend condition was never evaluated
+    (level condition already failed, or missing inputs) -- callers use
+    them only for target/context text, never for the buy-favorable
+    decision itself (that's fully captured in the returned css)."""
+    ma, ma_n = get_mvrv_momentum_ma(cache)
+    if ma is None or mvrv_val is None:
+        return None, None, ma, ma_n, None, None
+    level_label, level_css = status_pill(mvrv_val, "low", ma, cache=cache, token="MVRV_Z")
+    if level_css not in ("st-strong-buy", "st-buy", "st-near"):
+        return level_label, level_css, ma, ma_n, None, None
+    is_falling, today_avg, past_avg, trend_n = get_mvrv_momentum_trend(cache)
+    if is_falling is None:
+        needed = MVRV_MOMENTUM_TREND_SHORT_WINDOW_DAYS + MVRV_MOMENTUM_TREND_LOOKBACK_DAYS
+        return f"BUILDING TREND HISTORY ({trend_n}/{needed} days)", "st-mid", ma, ma_n, None, None
+    if is_falling:
+        return level_label, level_css, ma, ma_n, today_avg, past_avg
+    return (f"BELOW MA, NOT DECELERATING ({round(today_avg, 2)} vs {round(past_avg, 2)} "
+            f"{MVRV_MOMENTUM_TREND_LOOKBACK_DAYS}d ago)", "st-no", ma, ma_n, today_avg, past_avg)
+
+
 # ---------------------------------------------------------------------------
 # "Near-threshold" leeway. Real research behind this, not a guess: the
 # credible sources for exactly this problem (TradingView's own documented
@@ -4184,16 +4271,23 @@ def main():
     values["MACD_SLOPE_MOM_TARGET"] = target_for_momentum("MACD_SLOPE")
     print(f"    MACD Histogram Slope: {values['MACD_SLOPE_MOM_STATUS_LABEL']}")
 
-    print("  Checking MVRV Momentum (current Z-Score vs. own trailing 365d MA)...")
-    mvrv_mom_ma, mvrv_mom_n = get_mvrv_momentum_ma(cache)
+    print("  Checking MVRV Momentum (current Z-Score vs. own trailing 365d MA, AND still falling short-term)...")
     mvrv_val_for_mom = values.get("MVRV_Z")
+    label, css, mvrv_mom_ma, mvrv_mom_n, mvrv_mom_today_avg, mvrv_mom_past_avg = \
+        classify_mvrv_momentum(cache, mvrv_val_for_mom)
     if mvrv_mom_ma is not None and mvrv_val_for_mom is not None:
-        label, css = status_pill(mvrv_val_for_mom, "low", mvrv_mom_ma, cache=cache, token="MVRV_Z")
         values["MVRV_MOMENTUM"] = mvrv_val_for_mom
         values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = label
         values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = css
+        trend_note = (
+            f", AND falling vs. {MVRV_MOMENTUM_TREND_LOOKBACK_DAYS}d ago "
+            f"({round(mvrv_mom_today_avg, 2)} vs {round(mvrv_mom_past_avg, 2)}, "
+            f"{MVRV_MOMENTUM_TREND_SHORT_WINDOW_DAYS}d avg)"
+            if mvrv_mom_today_avg is not None else
+            " (short-term trend also required to fire, not just level)"
+        )
         values["MVRV_MOMENTUM_MOM_TARGET"] = (
-            f"≤ {round(mvrv_mom_ma, 2)} (own trailing {MVRV_MOMENTUM_WINDOW_DAYS}d MA, live, n={mvrv_mom_n})"
+            f"≤ {round(mvrv_mom_ma, 2)} (own trailing {MVRV_MOMENTUM_WINDOW_DAYS}d MA, live, n={mvrv_mom_n}){trend_note}"
         )
         WEIGHT_MAP_MOMENTUM["MVRV_MOMENTUM"] = 1.5  # Tier 3, same as Thermocap/NRPL's own bootstrap weight
         print(f"    MVRV Momentum: Z={mvrv_val_for_mom} vs 365d MA={round(mvrv_mom_ma, 2)} (n={mvrv_mom_n}) -> {label}")

@@ -955,26 +955,31 @@ def build_macd_slope_daily(market_price_series, target_dates):
 
 
 def build_mvrv_momentum_daily(mvrv_series):
-    """MVRV Momentum: current MVRV Z-Score vs. its own trailing 365-day
-    moving average (ud.get_mvrv_momentum_ma()), reading the same
+    """MVRV Momentum: calls ud.classify_mvrv_momentum() directly, the exact
+    same function main() calls -- so this backtest can never drift from
+    production's real AND-gated logic (current Z-Score below its own
+    365-day MA, AND its own short-term trend still genuinely falling; see
+    that function's own docstring, and the long comment above
+    ud.get_mvrv_momentum_trend(), for why the level condition alone was
+    replaced with this AND-gate -- Finding 2, Aug 2026). Reads the same
     "MVRV_Z__history" cache shape Table 1/3's own MVRV_Z walk-forward
     builds -- fed the identical mvrv_series here, so the cache content is
     numerically identical to theirs (see build_percentile_indicator()'s own
     docstring for why a separate cache instance doesn't change the
-    result). Below the n>=365 bootstrap gate, reports BUILDING HISTORY --
-    same honest-accumulation-progress discipline as everywhere else."""
+    result). Below either bootstrap gate, reports BUILDING HISTORY -- same
+    honest-accumulation-progress discipline as everywhere else."""
     cache = {}
     statuses = []
     for d, v in mvrv_series:
         ud.history_append(cache, "MVRV_Z", float(v), date=d)
-        ma, n = ud.get_mvrv_momentum_ma(cache)
+        label, css, ma, n, today_avg, past_avg = ud.classify_mvrv_momentum(cache, v)
         if ma is not None:
-            label, css = ud.status_pill(v, "low", ma, cache=cache, token="MVRV_Z")
             statuses.append((d, v, label, css))
         else:
             statuses.append((d, v, "BUILDING HISTORY", "st-mid"))
     return {
-        "name": "MVRV Momentum (vs. 365d MA)", "source": "BGeometrics (mvrv-zscore) via ud.get_mvrv_momentum_ma()",
+        "name": "MVRV Momentum (vs. 365d MA)",
+        "source": "BGeometrics (mvrv-zscore) via ud.classify_mvrv_momentum()",
         "category": "onchain", "statuses": statuses,
     }
 
