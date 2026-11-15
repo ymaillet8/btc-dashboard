@@ -79,6 +79,33 @@ BG_KEY_MISSING_NOTE = (
 _METADATA_KEYS = {"d", "date", "unixts", "unix_ts", "timestamp", "time"}
 
 
+# One-day production lag. A production run on day D only ever sees BGeometrics
+# values dated D-1 (the API's "latest" is yesterday's reading). The walk-forward
+# therefore uses value-dated-(D-1) on day D, i.e. every BGeometrics API series
+# is shifted forward by BG_LAG_DAYS. Applied once, at the fetch layer
+# (fetch_bg_range / fetch_pi_cycle_range), so every on-chain consumer in both
+# main() and --daily-matrix inherits it. Pass --no-bg-lag for the old,
+# unshifted behaviour (value dated D used on day D). Price/volume series
+# (Blockchain.com, CoinGecko-style) and the Active Addresses and Fear & Greed
+# files are NOT shifted: they are not BGeometrics API series.
+BG_LAG_DAYS = 1
+
+
+def _apply_bg_lag_dates(d):
+    return d + timedelta(days=BG_LAG_DAYS) if BG_LAG_DAYS else d
+
+
+def _rate_limit_header_summary(headers):
+    """Analysis-tool observability: every X-RateLimit-* header plus
+    Retry-After, as one printable string. Used on error responses (429s
+    especially), where fetch_bg_range used to discard them."""
+    if headers is None:
+        return "(no headers)"
+    items = [(k, v) for k, v in headers.items()
+             if k.lower().startswith("x-ratelimit") or k.lower() == "retry-after"]
+    return ", ".join(f"{k}={v}" for k, v in items) if items else "(no rate-limit headers present)"
+
+
 def fetch_bg_range(slug, start="2009-01-01", end=None, retries=1, max_wait_seconds=3600):
     """Real HTTP call (not routed through ud._get_json) so a 429 response's
     X-RateLimit-Reset-Hour header can be read and waited out precisely,
@@ -105,10 +132,11 @@ def fetch_bg_range(slug, start="2009-01-01", end=None, retries=1, max_wait_secon
                         val = v
                         break
                 if d and val is not None:
-                    out.append((date.fromisoformat(d), float(val)))
+                    out.append((_apply_bg_lag_dates(date.fromisoformat(d)), float(val)))
             out.sort(key=lambda t: t[0])
             return out, None
         except urllib.error.HTTPError as e:
+            print(f"    ! {slug}: HTTP {e.code} response headers: {_rate_limit_header_summary(e.headers)}")
             if e.code == 429 and attempt < retries:
                 reset_hdr = e.headers.get("X-RateLimit-Reset-Hour")
                 wait_s = 65
@@ -149,10 +177,11 @@ def fetch_pi_cycle_range(start="2009-01-01", end=None, retries=1, max_wait_secon
                 sma111 = row.get("piSma111")
                 sma350x2 = row.get("piSma350x2")
                 if d and sma111 is not None and sma350x2 is not None:
-                    out.append((date.fromisoformat(d), float(sma111), float(sma350x2)))
+                    out.append((_apply_bg_lag_dates(date.fromisoformat(d)), float(sma111), float(sma350x2)))
             out.sort(key=lambda t: t[0])
             return out, None
         except urllib.error.HTTPError as e:
+            print(f"    ! pi-cycle: HTTP {e.code} response headers: {_rate_limit_header_summary(e.headers)}")
             if e.code == 429 and attempt < retries:
                 reset_hdr = e.headers.get("X-RateLimit-Reset-Hour")
                 wait_s = 65
@@ -1823,6 +1852,12 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--no-bg-lag" in sys.argv:
+        BG_LAG_DAYS = 0
+        print("NOTE: --no-bg-lag: BGeometrics series used UNSHIFTED (value dated D on day D).")
+    else:
+        print(f"NOTE: BGeometrics series shifted +{BG_LAG_DAYS} day(s) (production sees D-1 on day D); "
+              "pass --no-bg-lag for the old behaviour.")
     if "--miner-capitulation-variants" in sys.argv:
         run_miner_capitulation_variant_analysis()
     elif "--daily-matrix" in sys.argv:
