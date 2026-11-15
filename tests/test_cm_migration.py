@@ -145,6 +145,34 @@ class TestFlagsAndShadowHelpers(unittest.TestCase):
         self.assertEqual(days_off, 0)
         self.assertGreater(days_on, 0)
 
+    def test_leeway_sigma_uses_last_200_points_of_cm_arrays_only(self):
+        import statistics
+        wide = [((i % 7) - 3) * 1.0 for i in range(530)]            # old, volatile part
+        calm = [0.30 + 0.01 * ((i % 5) - 2) for i in range(200)]      # last 200 points
+        cache = {"MVRV_Z_CM__history": {"values": wide + calm}, "MVRV_Z__history": {"values": wide + calm}}
+        sig_cm, src = ud.get_effective_sigma(cache, "MVRV_Z_CM", 0.0)
+        self.assertAlmostEqual(sig_cm, statistics.pstdev(calm), places=9)
+        self.assertEqual(src, "n=200")
+        # the legacy BG key keeps its old behaviour (backtests/tests rely on it): full array
+        sig_bg, _ = ud.get_effective_sigma(cache, "MVRV_Z", 0.0)
+        self.assertAlmostEqual(sig_bg, statistics.pstdev(wide + calm), places=9)
+        # band and STRONG BUY tier follow the same sigma
+        band, _ = ud.near_threshold_band(cache, "MVRV_Z_CM", 0.0)
+        self.assertAlmostEqual(band, sig_cm * ud.NEAR_BAND_STDEV_FRACTION, places=9)
+        self.assertEqual(ud.status_pill(-(ud.STRONG_BUY_STDEV_FRACTION * sig_cm) - 0.001, "low", 0.0, cache=cache, token="MVRV_Z_CM")[1], "st-strong-buy")
+        self.assertNotEqual(ud.status_pill(-(ud.STRONG_BUY_STDEV_FRACTION * sig_cm) + 0.01, "low", 0.0, cache=cache, token="MVRV_Z_CM")[1], "st-strong-buy")
+        # Puell's array is already 200 points: unchanged
+        pc = {"PUELL_CM__history": {"values": calm}}
+        self.assertAlmostEqual(ud.get_effective_sigma(pc, "PUELL_CM", 0.5)[0], statistics.pstdev(calm), places=9)
+
+    def test_table3_and_shadow_windows_still_read_full_cm_arrays(self):
+        vals = [float(i % 40) / 10 for i in range(730)]
+        cache = {"MVRV_Z_CM__history": {"values": vals}}
+        thr, n = ud.rolling_threshold(cache, "MVRV_Z_CM", percentile=90)
+        self.assertEqual(n, 730)
+        self.assertAlmostEqual(thr, ud.compute_percentile(vals, 90))
+        self.assertEqual(ud.LEEWAY_WINDOW_OVERRIDES, {"MVRV_Z_CM": ud.HISTORY_MAX_LEN, "PUELL_CM": ud.HISTORY_MAX_LEN})
+
     def test_shadow_log_one_entry_per_day(self):
         cache = {}
         v = {"MVRV_Z_SHADOW": {"z": 0.3, "thresholds": {"730": 0.4, "1460": 0.2, "full": -0.1},
@@ -329,6 +357,18 @@ class TestEndToEnd(unittest.TestCase):
         self.assertNotIn("MVRV_MOMENTUM", ud.WEIGHT_MAP_MOMENTUM)
         self.assertIn("fixed; adaptive threshold runs in shadow only, not scored", html)
         self.assertIn("SHADOW, NOT SCORED", html)
+
+    def test_shadow_labels_cannot_read_as_scored(self):
+        html = self.ok[0]
+        i = html.find("MVRV Momentum (vs. 365d MA)")
+        mom = html[html.rfind("<tr", 0, i):html.find("</tr>", i)]
+        self.assertIn("SHADOW, NOT SCORED (would read:", mom)
+        self.assertIn("shadow, not scored: ≤", mom)                       # target text
+        self.assertIn("status-pill st-mid", mom)                                 # neutral pill, not a buy colour
+        self.assertEqual(re.findall(r"(?<!NOT )(?<!not )SCORED", mom), [])      # never a bare "SCORED"
+        z = row_for(html, "MVRV Z-Score")
+        self.assertRegex(z, r"adaptive, shadow, not scored: 1460d = -?\d+\.\d+ -> [a-z ]+</div>")
+        self.assertIn('title="shadow, not scored.', z)
 
     def test_weights_unchanged(self):
         self.assertEqual(ud.WEIGHT_MAP["MVRV_Z"], 3)

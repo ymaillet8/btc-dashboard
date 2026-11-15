@@ -570,6 +570,16 @@ def compute_stdev(values):
     return variance ** 0.5
 
 
+# Leeway (near-threshold band + STRONG BUY tier) sigma window. Every other indicator's array is already
+# capped at HISTORY_MAX_LEN (200) points, so its sigma is a ~200-day measure. The Coin Metrics MVRV Z array is
+# kept at 730 points (Table 3's percentile window and the shadow adaptive windows need them), so its leeway
+# sigma is explicitly limited to the last HISTORY_MAX_LEN points to match every other indicator; the 730-day
+# sigma was ~4x wider (0.90 vs 0.21) and would have widened the BORDERLINE band to +0.225 on a fixed 0.0 line.
+# Puell's CM array is already 200 points. Only affects these keys; Table 3 and the shadow windows read the
+# full arrays and are untouched.
+LEEWAY_WINDOW_OVERRIDES = {"MVRV_Z_CM": HISTORY_MAX_LEN, "PUELL_CM": HISTORY_MAX_LEN}
+
+
 def get_effective_sigma(cache, token, threshold):
     """Shared sigma source for both the leeway band and the strong-buy
     tier, so the two stay consistent rather than each having its own
@@ -589,6 +599,9 @@ def get_effective_sigma(cache, token, threshold):
     fewer than 3 days)."""
     hist_key = f"{token}__history"
     values = cache.get(hist_key, {}).get("values", [])
+    cap = LEEWAY_WINDOW_OVERRIDES.get(token)
+    if cap:
+        values = values[-cap:]
     n = len(values)
     if n >= NEAR_STDEV_MIN_DAYS:
         sigma = compute_stdev(values)
@@ -978,9 +991,9 @@ def cm_scoring_inputs(values, cache, run_date=None):
         values["MVRV_Z_SHADOW"] = {"z": round(z_now, 4), "thresholds": {k: (None if v is None else round(v, 4)) for k, v in thr.items()},
                                    "statuses": stat, "data_date": series["latest"].isoformat()}
         if thr.get("1460") is not None:
-            tip = "; ".join(f"{k}d: {thr[k]:.2f} -> {stat[k]}" if k != "full" else f"full: {thr[k]:.2f} -> {stat[k]}" for k in thr if thr[k] is not None)
+            tip = "shadow, not scored. " + "; ".join(f"{k}d: {thr[k]:.2f} -> {stat[k].lower()}" if k != "full" else f"full: {thr[k]:.2f} -> {stat[k].lower()}" for k in thr if thr[k] is not None)
             values["MVRV_Z_SHADOW_CAPTION"] = (f'<div class="xcheck" title="{tip}">adaptive, shadow, not scored: '
-                                               f'1460d = {thr["1460"]:.2f} -> {stat["1460"]}</div>')
+                                               f'1460d = {thr["1460"]:.2f} -> {stat["1460"].lower()}</div>')
     return series
 
 
@@ -4695,7 +4708,7 @@ def main():
             values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = label
             values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = css
         else:
-            values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = f"SHADOW, NOT SCORED (would be: {label})"
+            values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = f"SHADOW, NOT SCORED (would read: {str(label).lower()})"
             values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = "st-mid"
         trend_note = (
             f", AND falling vs. {MVRV_MOMENTUM_TREND_LOOKBACK_DAYS}d ago "
@@ -4706,6 +4719,8 @@ def main():
         )
         values["MVRV_MOMENTUM_MOM_TARGET"] = (
             f"≤ {round(mvrv_mom_ma, 2)} (own trailing {MVRV_MOMENTUM_WINDOW_DAYS}d MA, live, n={mvrv_mom_n}){trend_note}"
+            if MVRV_MOMENTUM_LIVE else
+            f"shadow, not scored: ≤ {round(mvrv_mom_ma, 2)} (own trailing {MVRV_MOMENTUM_WINDOW_DAYS}d MA, n={mvrv_mom_n}){trend_note}"
         )
         if MVRV_MOMENTUM_LIVE:
             WEIGHT_MAP_MOMENTUM["MVRV_MOMENTUM"] = 1.5  # Tier 3, same as Thermocap/NRPL's own bootstrap weight
