@@ -254,11 +254,12 @@ filter out a one-day wobble, not to hide it.
 
 ### MVRV-Z / Price Divergence detector (§6)
 
-Watches for the pattern that preceded the actual Nov 2022 bottom: price
-making a **lower low** while MVRV Z-Score simultaneously makes a **higher
-low** (-1.36 in Nov 2022 vs. -2.53 in June 2022) — a price washout not
-matched by an equally deep on-chain capitulation, a classic bullish
-divergence.
+Watches for a classic bullish-divergence setup: price making a **lower low**
+while MVRV Z-Score simultaneously makes a **higher low** — a price washout
+not matched by an equally deep on-chain capitulation. This is **not verified**
+against the 2022 lows: Z recomputed from Coin Metrics data was about -0.25 at
+the 18 Jun 2022 price low and -0.36 at the 9 Nov 2022 low (a lower Z low, not
+a higher one); the earlier "-1.36 vs. -2.53" figures could not be reproduced.
 
 `detect_mvrv_price_divergence()` identifies the two most recent local
 price minima over a trailing 180-day window (standard swing-low detection:

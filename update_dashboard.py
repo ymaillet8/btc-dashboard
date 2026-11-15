@@ -3185,11 +3185,14 @@ def build_tranche_checklist_html(tranche_data):
 # ---------------------------------------------------------------------------
 # MVRV-Z / Price bullish divergence -- a confirming/context signal, NOT a
 # weighted indicator (never added to WEIGHT_MAP, _ALL_TRACKED_TOKENS, or
-# either pie chart, per spec). Detects the pattern that preceded the actual
-# Nov 2022 bottom: price made a LOWER low than its prior swing low, but
-# MVRV Z-Score made a HIGHER low (-1.36 vs. the June 2022 -2.53 low) --
-# i.e. the price washout wasn't matched by an equally deep on-chain
-# capitulation, a classic bullish-divergence setup.
+# either pie chart, per spec). Detects a classic bullish-divergence setup:
+# price makes a LOWER low than its prior swing low, but MVRV Z-Score makes a
+# HIGHER low -- i.e. the price washout isn't matched by an equally deep
+# on-chain capitulation. NOTE: this pattern is NOT verified against the
+# Nov 2022 bottom. Z recomputed from Coin Metrics data (MVRV and market cap,
+# expanding-window sigma) was -0.25 at the 18 Jun 2022 price low ($19,014) and
+# -0.36 at the 9 Nov 2022 low ($15,758): a LOWER Z low, not a higher one. The
+# earlier "-1.36 vs -2.53" figures could not be reproduced from any source.
 #
 # Local-minimum definition: standard swing-low detection -- a day counts as
 # a local minimum if its price is the lowest value in the +/-swing_window
@@ -3294,9 +3297,11 @@ def build_divergence_card_html(result):
     status, the two comparison points (date/price/Z-score), one-line
     explainer. Never touches WEIGHT_MAP or either pie chart -- context
     only, per spec."""
-    explainer = ("Price making a lower low while MVRV Z-Score makes a higher low is the pattern that "
-                 "preceded the actual Nov 2022 bottom (price lower low, but Z-Score -1.36 vs. the June "
-                 "2022 -2.53 low) — the price washout not matched by equally deep on-chain capitulation.")
+    explainer = ("Price making a lower low while MVRV Z-Score makes a higher low is a classic bullish-"
+                 "divergence setup — the price washout not matched by equally deep on-chain capitulation. "
+                 "It is not a verified bottom signal: around the 2022 lows, Z recomputed from Coin Metrics "
+                 "data was about -0.25 at the June 2022 price low and -0.36 at the Nov 2022 low, a lower "
+                 "Z low rather than a higher one.")
 
     def _point_html(label, point):
         if point is None:
@@ -3495,8 +3500,8 @@ def build_discussion_extended_html(verdict, tranche_data, divergence_result):
     elif divergence_detected:
         divergence_para = (
             '<strong>3. Divergence picture:</strong> A bullish MVRV-Z / price divergence has been detected — '
-            'price made a lower low while MVRV Z-Score made a higher low, the pattern that preceded the '
-            'actual Nov 2022 bottom.'
+            'price made a lower low while MVRV Z-Score made a higher low, a classic bullish-divergence '
+            'setup (not verified against the 2022 lows).'
         )
     else:
         divergence_para = (
