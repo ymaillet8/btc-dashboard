@@ -115,9 +115,95 @@ def cache_lookup(cache, key):
         return None, None
 
 
-def cache_store(cache, key, value):
+def cache_store(cache, key, value, data_date=None):
+    """data_date: the data provider's OWN date stamp for this reading (e.g. BGeometrics'
+    "d"), kept next to the fetch timestamp so the page can show how old the data really is.
+    Optional and purely informational; nothing keys off it."""
     if value is not None:
-        cache[key] = {"value": value, "date": datetime.now(timezone.utc).isoformat()}
+        entry = {"value": value, "date": datetime.now(timezone.utc).isoformat()}
+        if data_date:
+            entry["data_date"] = data_date
+        cache[key] = entry
+
+
+def cache_data_date(cache, key):
+    """The stored provider data date for a cached reading, or None."""
+    entry = cache.get(key)
+    return entry.get("data_date") if isinstance(entry, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# "Data as of" -- how old is each BGeometrics-sourced reading, really? Presentation only:
+# nothing here feeds history_append, thresholds, weights, tiers or the verdict.
+# ---------------------------------------------------------------------------
+AS_OF_WARN_DAYS = 2        # N > this -> warning style + banner
+
+# Tokens whose AS_OF is inherited from another token's fetch (derived readings).
+AS_OF_INHERITS = {"SUPPLY_LOSS": "SUPPLY_PROFIT", "ASOPR_EST": "SOPR", "MVRV_MOMENTUM": "MVRV_Z"}
+# Every BGeometrics-sourced reading shown in a table (fetched or derived).
+AS_OF_TOKENS = ("MVRV_Z", "REALIZED_PRICE", "PUELL", "RESERVE_RISK", "LTH_SOPR", "THERMOCAP", "NRPL",
+                "SUPPLY_PROFIT", "SOPR", "SUPPLY_LOSS", "ASOPR_EST", "MVRV_MOMENTUM",
+                "ACTIVE_ADDR_DEV", "PI_CYCLE_TOP")
+
+
+def run_date_utc():
+    return datetime.now(timezone.utc).date()
+
+
+def parse_data_date(value):
+    """'YYYY-MM-DD' (or an ISO datetime string) -> date; None if missing/unparseable."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def data_age_days(data_date, run_date=None):
+    """Age N = run date (UTC) minus the provider's data date, in whole days. None when the
+    stamp is missing/unparseable (never guessed)."""
+    d = parse_data_date(data_date)
+    if d is None:
+        return None
+    return ((run_date or run_date_utc()) - d).days
+
+
+def asof_caption_html(values, token, run_date=None):
+    """Small caption under a reading: 'as of YYYY-MM-DD (N days old)'. Warning style when
+    N > AS_OF_WARN_DAYS. Empty for tokens with no BGeometrics provenance and for BG tokens
+    with no reading."""
+    key = f"{token}_AS_OF"
+    if key not in values or values.get(token) is None:
+        return ""
+    stamp = values.get(key)
+    n = data_age_days(stamp, run_date)
+    if n is None:
+        return '<div class="asof asof-warn">as of unknown (no date stamp)</div>'
+    unit = "day" if n == 1 else "days"
+    cls = "asof asof-warn" if n > AS_OF_WARN_DAYS else "asof"
+    return f'<div class="{cls}">as of {parse_data_date(stamp).isoformat()} ({n} {unit} old)</div>'
+
+
+def data_age_banner_html(values, run_date=None):
+    """One banner when ANY BGeometrics series is more than AS_OF_WARN_DAYS old."""
+    ages = []
+    for tok in AS_OF_TOKENS:
+        if values.get(tok) is None or f"{tok}_AS_OF" not in values:
+            continue
+        n = data_age_days(values.get(f"{tok}_AS_OF"), run_date)
+        if n is not None and n > AS_OF_WARN_DAYS:
+            ages.append(n)
+    if not ages:
+        return ""
+    lo, hi = min(ages), max(ages)
+    days = f"{hi}" if lo == hi else f"{lo}-{hi}"
+    return (
+        '<div class="master" style="border-color:#4a3a14; margin-bottom:20px;">'
+        '<div class="master-top"><div><div class="master-label" style="color:var(--amber);">DATA FRESHNESS NOTICE</div>'
+        f'<div class="master-name">On-chain data from the free BGeometrics tier is {days} days delayed; '
+        'affected readings are marked.</div></div></div></div>'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -688,8 +774,27 @@ def _log_bg_rate_limit(slug, headers):
               f"{remaining_day}/day remaining, hour resets in {reset_hour}s")
 
 
+def _bg_entry_data_date(entry):
+    """The provider's own date stamp for a BGeometrics row: "d" (or "date"); falls back to
+    unixTs (00:00 UTC of the stamped day). None when the row carries no usable stamp."""
+    if not isinstance(entry, dict):
+        return None
+    for k in ("d", "date"):
+        got = parse_data_date(entry.get(k))
+        if got:
+            return got.isoformat()
+    for k in ("unixTs", "unixts", "unix_ts"):
+        ts = entry.get(k)
+        try:
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc).date().isoformat()
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+    return None
+
+
 def fetch_bg_latest(slug):
-    """Fetch and unwrap the latest value for one metric.
+    """Fetch and unwrap the latest value for one metric. Returns (value, data_date):
+    data_date is the API row's own date stamp ("YYYY-MM-DD") or None when absent.
 
     Confirmed real response shape (per your live dashboard, Aug 2, 2026):
         [{"d": "2026-08-01", "unixTs": 1785542400, "mvrvZscore": 0.3471}]
@@ -716,16 +821,16 @@ def fetch_bg_latest(slug):
             if isinstance(last, dict):
                 entry = last
             else:
-                return last  # bare value at the end of a plain list
+                return last, None  # bare value at the end of a plain list: no stamp available
         elif isinstance(data, dict):
             if "value" in data:
-                return data["value"]
+                return data["value"], _bg_entry_data_date(data)
             d = data.get("data")
             if isinstance(d, list) and d:
                 last = d[-1]
                 entry = last if isinstance(last, dict) else None
                 if entry is None:
-                    return last
+                    return last, None
             elif isinstance(d, dict):
                 entry = d
             else:
@@ -734,13 +839,13 @@ def fetch_bg_latest(slug):
         if entry:
             for key, val in entry.items():
                 if key.lower() not in METADATA_KEYS:
-                    return val
+                    return val, _bg_entry_data_date(entry)
     except urllib.error.HTTPError as e:
         _log_bg_rate_limit(slug, e.headers)
         print(f"  ! {slug}: HTTP {e.code} — {e.reason}")
     except Exception as e:
         print(f"  ! {slug}: failed — {e}")
-    return None
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -763,8 +868,8 @@ def fetch_bg_latest(slug):
 # verified against a known historical crossover before shipping.
 # ---------------------------------------------------------------------------
 def fetch_pi_cycle_latest():
-    """Latest day's (piSma111, piSma350x2) from BGeometrics' pi-cycle feed,
-    or (None, None) on any fetch/parse failure."""
+    """Latest day's (piSma111, piSma350x2, data_date) from BGeometrics' pi-cycle feed,
+    or (None, None, None) on any fetch/parse failure. data_date = the row's own stamp or None."""
     url = f"{BG_BASE}/pi-cycle"
     try:
         data = _get_json(url, headers={
@@ -777,12 +882,12 @@ def fetch_pi_cycle_latest():
                 sma111 = last.get("piSma111")
                 sma350x2 = last.get("piSma350x2")
                 if sma111 is not None and sma350x2 is not None:
-                    return float(sma111), float(sma350x2)
+                    return float(sma111), float(sma350x2), _bg_entry_data_date(last)
     except urllib.error.HTTPError as e:
         print(f"  ! pi-cycle: HTTP {e.code} — {e.reason}")
     except Exception as e:
         print(f"  ! pi-cycle: failed — {e}")
-    return None, None
+    return None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -2269,6 +2374,7 @@ def build_full_weighted_breakdown(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "\u2014" if reading_val is None else reading_val
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -2385,6 +2491,7 @@ def build_full_weighted_breakdown_top(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "—" if reading_val is None else reading_val
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -3565,6 +3672,7 @@ def build_full_weighted_breakdown_momentum(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "—" if reading_val is None else reading_val
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -3771,9 +3879,10 @@ def main():
 
     print(f"Fetching {len(BG_METRICS)} indicators from BGeometrics...")
     for token, (slug, direction, threshold) in BG_METRICS.items():
-        val = fetch_bg_latest(slug)
+        val, data_date = fetch_bg_latest(slug)
         if val is not None:
-            cache_store(cache, token, val)
+            cache_store(cache, token, val, data_date=data_date)
+            values[f"{token}_AS_OF"] = data_date
             try:
                 history_append(cache, token, float(val))
             except (TypeError, ValueError):
@@ -3784,6 +3893,7 @@ def main():
             cached_val, cached_date = cache_lookup(cache, token)
             if cached_val is not None:
                 values[token] = cached_val
+                values[f"{token}_AS_OF"] = cache_data_date(cache, token)
                 label, css = f"STALE ({cached_date})", "st-mid"
                 print(f"  {token}: live fetch failed, using cached value from {cached_date}")
             else:
@@ -3816,8 +3926,9 @@ def main():
             if seeded_n:
                 print(f"  Seeded rolling-history cache with {seeded_n} historical daily deviations")
             values["ACTIVE_ADDR_DEV"] = aa_deviation
+            values["ACTIVE_ADDR_DEV_AS_OF"] = str(today_date)[:10]
             if aa_deviation is not None:
-                cache_store(cache, "ACTIVE_ADDR_DEV", aa_deviation)
+                cache_store(cache, "ACTIVE_ADDR_DEV", aa_deviation, data_date=str(today_date)[:10])
                 if not seeded_n:
                     # History already existed (post-bootstrap) — normal
                     # single-value-per-day append, identical to every other
@@ -3832,6 +3943,7 @@ def main():
         cached_val, cached_date = cache_lookup(cache, "ACTIVE_ADDR_DEV")
         if cached_val is not None:
             values["ACTIVE_ADDR_DEV"] = cached_val
+            values["ACTIVE_ADDR_DEV_AS_OF"] = cache_data_date(cache, "ACTIVE_ADDR_DEV")
             values["ACTIVE_ADDR_DEV_STATUS_LABEL"] = f"STALE ({cached_date})"
             values["ACTIVE_ADDR_DEV_STATUS_CLASS"] = "st-mid"
             print(f"  ACTIVE_ADDR_DEV: live fetch failed, using cached value from {cached_date}")
@@ -3928,6 +4040,7 @@ def main():
         else:
             print("  ! circulating supply (totalbc) unavailable — SUPPLY_LOSS staying N/A")
     values["SUPPLY_LOSS"] = supply_loss_val
+    values["SUPPLY_LOSS_AS_OF"] = values.get("SUPPLY_PROFIT_AS_OF")
     if supply_profit_is_stale:
         cached_date = values["SUPPLY_PROFIT_STATUS_LABEL"].split("(")[1].rstrip(")")
         label, css = f"STALE ({cached_date})", "st-mid"
@@ -3945,6 +4058,7 @@ def main():
     sopr_is_stale = values.get("SOPR_STATUS_LABEL", "").startswith("STALE")
     asopr_est = compute_asopr_estimate(values.get("SOPR"))
     values["ASOPR_EST"] = asopr_est
+    values["ASOPR_EST_AS_OF"] = values.get("SOPR_AS_OF")
     if sopr_is_stale:
         cached_date = values["SOPR_STATUS_LABEL"].split("(")[1].rstrip(")")
         label, css = f"STALE ({cached_date})", "st-mid"
@@ -4277,6 +4391,7 @@ def main():
         classify_mvrv_momentum(cache, mvrv_val_for_mom)
     if mvrv_mom_ma is not None and mvrv_val_for_mom is not None:
         values["MVRV_MOMENTUM"] = mvrv_val_for_mom
+        values["MVRV_MOMENTUM_AS_OF"] = values.get("MVRV_Z_AS_OF")
         values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = label
         values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = css
         trend_note = (
@@ -4293,6 +4408,7 @@ def main():
         print(f"    MVRV Momentum: Z={mvrv_val_for_mom} vs 365d MA={round(mvrv_mom_ma, 2)} (n={mvrv_mom_n}) -> {label}")
     else:
         values["MVRV_MOMENTUM"] = mvrv_val_for_mom
+        values["MVRV_MOMENTUM_AS_OF"] = values.get("MVRV_Z_AS_OF")
         values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = "BUILDING HISTORY"
         values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = "st-mid"
         values["MVRV_MOMENTUM_MOM_TARGET"] = f"N/A — building history ({mvrv_mom_n}/{MVRV_MOMENTUM_MIN_DAYS} days)"
@@ -4321,7 +4437,8 @@ def main():
     print("Computing Table 3 (Cycle Top) indicators...")
 
     print("  Fetching Pi Cycle Top (BGeometrics pi-cycle, genuinely new)...")
-    pi_sma111, pi_sma350x2 = fetch_pi_cycle_latest()
+    pi_sma111, pi_sma350x2, pi_data_date = fetch_pi_cycle_latest()
+    values["PI_CYCLE_TOP_AS_OF"] = pi_data_date
     if pi_sma111 is not None and pi_sma350x2 is not None and pi_sma350x2:
         pi_pct_away = round((pi_sma350x2 - pi_sma111) / pi_sma350x2 * 100, 2)
         pi_crossed = pi_sma111 >= pi_sma350x2
@@ -4443,6 +4560,8 @@ def main():
     )
     values["VERDICT_TREND_HTML"] = build_verdict_trend_html(cache)
     print(f"  VERDICT_HISTORY now has {len(cache.get('VERDICT_HISTORY', []))} days of accumulated data")
+
+    values["DATA_AGE_BANNER"] = data_age_banner_html(values)
 
     with open("dashboard_template.html", "r", encoding="utf-8") as f:
         html = f.read()

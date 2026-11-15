@@ -92,6 +92,8 @@
   tbody tr:hover{background:var(--panel);}
   .ind-name{font-weight:600; font-size:15px; display:flex; align-items:center; flex-wrap:wrap; gap:6px;}
   .caveat{color:var(--text-faint); font-weight:400; font-size:12.5px;}
+  .asof{color:var(--text-faint); font-weight:400; font-size:11.5px; margin-top:2px; white-space:nowrap;}
+  .asof-warn{color:var(--amber); font-weight:600;}
   .anchor-icon{color:var(--blue); font-size:13px; opacity:.85;}
   .ind-source a{font-family:var(--mono); font-size:12px; text-decoration:none;}
   .ind-source a:hover{text-decoration:underline;}
@@ -335,6 +337,7 @@
   </div>
 
   {{STALENESS_BANNER}}
+  {{DATA_AGE_BANNER}}
 
   <div class="section" style="margin-top:32px;">
     <div class="master">
