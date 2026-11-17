@@ -132,7 +132,15 @@ def run_main(bg_date):
     tmp = tempfile.mkdtemp()
     try:
         shutil.copy(os.path.join(ROOT, "dashboard_template.html"), tmp)
-        shutil.copy(os.path.join(ROOT, "last_known_good.json"), tmp)
+        # Seed the temp cache with history only. The repo's live cache also holds dated provider
+        # readings; whichever of them is older than the 2-day warn limit on the day the test runs
+        # (e.g. a fallback entry from an earlier run) would trigger the banner and make these
+        # tests depend on the real calendar date.
+        with open(os.path.join(ROOT, "last_known_good.json"), encoding="utf-8") as f:
+            real = json.load(f)
+        hist_only = {k: v for k, v in real.items() if k == "VERDICT_HISTORY" or k.endswith("__history")}
+        with open(os.path.join(tmp, "last_known_good.json"), "w", encoding="utf-8") as f:
+            json.dump(hist_only, f)
         cwd = os.getcwd()
         os.chdir(tmp)
         buf = io.StringIO()
