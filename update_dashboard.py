@@ -812,6 +812,20 @@ CM_ATTRIBUTION = (
 # Turning either on is a deliberate, separate decision (see README, Known limitations).
 MVRV_ADAPTIVE_THRESHOLD_ACTIVE = False
 MVRV_MOMENTUM_LIVE = False
+
+# Cycle Top (Table 3) MVRV Z-Score threshold ceiling. PROVISIONAL, tuned to the Oct 2025 top: Coin Metrics Z
+# peaked at 2.53 on 6 Oct 2025 (BTC close high ~$124.8K). The rolling 90th percentile of the 730-point Coin
+# Metrics array was 2.71 on 14 Nov 2026 (the Nov 2024 - Feb 2025 peak sits inside that window), which would
+# have missed that top, so the threshold is min(percentile, this ceiling). Revisit once a final window
+# decision for the top-side percentile is made. Applies to the MVRV Z-Score Cycle Top row only.
+MVRV_Z_TOP_THRESHOLD_CEILING = 1.5
+
+
+def cap_top_threshold(token, threshold):
+    """Cycle Top threshold after the provisional MVRV Z ceiling (identity for every other token / None)."""
+    if token == "MVRV_Z" and threshold is not None:
+        return min(threshold, MVRV_Z_TOP_THRESHOLD_CEILING)
+    return threshold
 # Marker on NEW VERDICT_HISTORY rows only: scoring inputs for MVRV Z / Puell / Realized Price switched from
 # BGeometrics (~7 days old) to Coin Metrics (~1 day old) on this date. Old rows are never rewritten.
 CM_SOURCE_BREAK_MARKER = "cm-2026-11"
@@ -4798,6 +4812,7 @@ def main():
     for token, join_weight in TOP_PERCENTILE_WEIGHTS.items():
         fresh_val = values.get(token)
         threshold, n_points = rolling_threshold(cache, cm_hist_token(token), percentile=100 - PERCENTILE_CUTOFF)
+        threshold = cap_top_threshold(token, threshold)
         if threshold is not None and fresh_val is not None and not str(values.get(f"{token}_STATUS_LABEL", "")).startswith("STALE"):
             label, css = status_pill(fresh_val, "high", threshold, cache=cache, token=cm_hist_token(token))
             values[f"{token}_TOP_STATUS_LABEL"] = label
