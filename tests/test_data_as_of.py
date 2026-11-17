@@ -163,6 +163,7 @@ def run_main(bg_date):
 
 def strip_presentation(html):
     html = re.sub(r'<div class="asof[^"]*">[^<]*</div>', "", html)
+    html = re.sub(r'<div class="xcheck"[^>]*>.*?</div>', "", html)
     html = re.sub(r'<div class="master" style="border-color:#4a3a14;[^>]*>.*?DATA FRESHNESS NOTICE.*?</div></div></div></div>',
                   "", html, flags=re.S)
     return html

@@ -183,7 +183,8 @@ def asof_caption_html(values, token, run_date=None):
         return '<div class="asof asof-warn">as of unknown (no date stamp)</div>'
     unit = "day" if n == 1 else "days"
     cls = "asof asof-warn" if n > AS_OF_WARN_DAYS else "asof"
-    return f'<div class="{cls}">as of {parse_data_date(stamp).isoformat()} ({n} {unit} old)</div>'
+    src = " &middot; Coin Metrics-derived" if values.get(f"{token}_SRC") == "CM" else ""
+    return f'<div class="{cls}">as of {parse_data_date(stamp).isoformat()} ({n} {unit} old){src}</div>'
 
 
 def data_age_banner_html(values, run_date=None):
@@ -244,7 +245,7 @@ PERCENTILE_CUTOFF = 10      # bottom 10th percentile of trailing history = buy-f
 # changes. (730 hardcoded here, matching MVRV_ADAPTIVE_WINDOW_DAYS defined
 # further down -- can't reference that constant yet at this point in the
 # file, so keep the two in sync if either ever changes.)
-HISTORY_MAX_LEN_OVERRIDES = {"MVRV_Z": 730}
+HISTORY_MAX_LEN_OVERRIDES = {"MVRV_Z": 730, "MVRV_Z_CM": 730}
 
 
 def history_append(cache, key, value, date=None):
@@ -305,7 +306,7 @@ def history_append(cache, key, value, date=None):
 # VERDICT_PCT/VERDICT_PCT_MOM/VERDICT_PCT_TOP to on every real run. Feeds
 # build_verdict_trend_html()'s monthly SVG chart.
 # ---------------------------------------------------------------------------
-def verdict_history_append(cache, entry_date, cycle_bottom_pct, momentum_shift_pct, cycle_top_pct, source="live"):
+def verdict_history_append(cache, entry_date, cycle_bottom_pct, momentum_shift_pct, cycle_top_pct, source="live", data_source=None):
     """Appends one day's three weighted-verdict percentages to
     cache["VERDICT_HISTORY"]. Same same-day-replace dedup discipline as
     history_append() above (a second call for the same calendar day
@@ -331,6 +332,8 @@ def verdict_history_append(cache, entry_date, cycle_bottom_pct, momentum_shift_p
         "momentum_shift_pct": momentum_shift_pct, "cycle_top_pct": cycle_top_pct,
         "source": source,
     }
+    if data_source:       # optional provenance marker on NEW rows only (e.g. "cm-2026-11"); old rows untouched
+        entry["data_source"] = data_source
     if history and history[-1].get("date") == day:
         history[-1] = entry
     else:
@@ -399,7 +402,7 @@ MVRV_ADAPTIVE_PERCENTILE = 7.5      # midpoint of the requested 5th-10th percent
 
 
 def get_adaptive_mvrv_threshold(cache, percentile=MVRV_ADAPTIVE_PERCENTILE,
-                                 window_days=MVRV_ADAPTIVE_WINDOW_DAYS):
+                                 window_days=MVRV_ADAPTIVE_WINDOW_DAYS, hist_token="MVRV_Z"):
     """Returns (threshold, n_points): the `percentile`-th percentile of
     MVRV_Z's own trailing `window_days` of history, or (None, n_points) if
     fewer than MVRV_ADAPTIVE_MIN_DAYS points have accumulated yet -- same
@@ -409,7 +412,7 @@ def get_adaptive_mvrv_threshold(cache, percentile=MVRV_ADAPTIVE_PERCENTILE,
     generic BG_METRICS loop already populates every run -- zero extra API
     cost, identical in spirit to the Thermocap/NRPL rolling-percentile
     system, just its own window/gate per the reasoning above."""
-    values = cache.get("MVRV_Z__history", {}).get("values", [])
+    values = cache.get(f"{hist_token}__history", {}).get("values", [])
     n = len(values)
     if n < MVRV_ADAPTIVE_MIN_DAYS:
         return None, n
@@ -431,14 +434,14 @@ MVRV_MOMENTUM_MIN_DAYS = 365
 
 
 def get_mvrv_momentum_ma(cache, window_days=MVRV_MOMENTUM_WINDOW_DAYS,
-                          min_days=MVRV_MOMENTUM_MIN_DAYS):
+                          min_days=MVRV_MOMENTUM_MIN_DAYS, hist_token="MVRV_Z"):
     """Returns (trailing_365d_average, n_points), or (None, n_points) below
     the bootstrap gate. Reads the exact same "MVRV_Z__history" cache Table
     1/3 already populate every run -- zero extra API cost, zero new
     history series. Plain arithmetic mean (not a percentile) is the right
     tool here: this measures where today sits relative to its own recent
     trend, not where it ranks in a distribution."""
-    values = cache.get("MVRV_Z__history", {}).get("values", [])
+    values = cache.get(f"{hist_token}__history", {}).get("values", [])
     n = len(values)
     if n < min_days:
         return None, n
@@ -481,14 +484,14 @@ MVRV_MOMENTUM_TREND_LOOKBACK_DAYS = 30
 
 
 def get_mvrv_momentum_trend(cache, short_window=MVRV_MOMENTUM_TREND_SHORT_WINDOW_DAYS,
-                             lookback_days=MVRV_MOMENTUM_TREND_LOOKBACK_DAYS):
+                             lookback_days=MVRV_MOMENTUM_TREND_LOOKBACK_DAYS, hist_token="MVRV_Z"):
     """Returns (is_falling, today_avg, past_avg, n_points), or
     (None, None, None, n_points) below the bootstrap gate (needs
     short_window + lookback_days of accumulated history -- always
     satisfied well before get_mvrv_momentum_ma()'s own 365-day gate opens,
     so this never becomes the binding constraint in practice). Reads the
     same "MVRV_Z__history" cache -- zero extra API cost, zero new series."""
-    values = cache.get("MVRV_Z__history", {}).get("values", [])
+    values = cache.get(f"{hist_token}__history", {}).get("values", [])
     n = len(values)
     min_needed = short_window + lookback_days
     if n < min_needed:
@@ -499,7 +502,7 @@ def get_mvrv_momentum_trend(cache, short_window=MVRV_MOMENTUM_TREND_SHORT_WINDOW
     return today_avg < past_avg, today_avg, past_avg, n
 
 
-def classify_mvrv_momentum(cache, mvrv_val):
+def classify_mvrv_momentum(cache, mvrv_val, hist_token="MVRV_Z"):
     """Table 2's real MVRV Momentum status -- fires (buy-favorable) only
     when BOTH hold: (a) current MVRV Z-Score sits below its own trailing
     365-day MA (get_mvrv_momentum_ma(), the original level condition,
@@ -517,13 +520,13 @@ def classify_mvrv_momentum(cache, mvrv_val):
     (level condition already failed, or missing inputs) -- callers use
     them only for target/context text, never for the buy-favorable
     decision itself (that's fully captured in the returned css)."""
-    ma, ma_n = get_mvrv_momentum_ma(cache)
+    ma, ma_n = get_mvrv_momentum_ma(cache, hist_token=hist_token)
     if ma is None or mvrv_val is None:
         return None, None, ma, ma_n, None, None
-    level_label, level_css = status_pill(mvrv_val, "low", ma, cache=cache, token="MVRV_Z")
+    level_label, level_css = status_pill(mvrv_val, "low", ma, cache=cache, token=hist_token)
     if level_css not in ("st-strong-buy", "st-buy", "st-near"):
         return level_label, level_css, ma, ma_n, None, None
-    is_falling, today_avg, past_avg, trend_n = get_mvrv_momentum_trend(cache)
+    is_falling, today_avg, past_avg, trend_n = get_mvrv_momentum_trend(cache, hist_token=hist_token)
     if is_falling is None:
         needed = MVRV_MOMENTUM_TREND_SHORT_WINDOW_DAYS + MVRV_MOMENTUM_TREND_LOOKBACK_DAYS
         return f"BUILDING TREND HISTORY ({trend_n}/{needed} days)", "st-mid", ma, ma_n, None, None
@@ -567,6 +570,16 @@ def compute_stdev(values):
     return variance ** 0.5
 
 
+# Leeway (near-threshold band + STRONG BUY tier) sigma window. Every other indicator's array is already
+# capped at HISTORY_MAX_LEN (200) points, so its sigma is a ~200-day measure. The Coin Metrics MVRV Z array is
+# kept at 730 points (Table 3's percentile window and the shadow adaptive windows need them), so its leeway
+# sigma is explicitly limited to the last HISTORY_MAX_LEN points to match every other indicator; the 730-day
+# sigma was ~4x wider (0.90 vs 0.21) and would have widened the BORDERLINE band to +0.225 on a fixed 0.0 line.
+# Puell's CM array is already 200 points. Only affects these keys; Table 3 and the shadow windows read the
+# full arrays and are untouched.
+LEEWAY_WINDOW_OVERRIDES = {"MVRV_Z_CM": HISTORY_MAX_LEN, "PUELL_CM": HISTORY_MAX_LEN}
+
+
 def get_effective_sigma(cache, token, threshold):
     """Shared sigma source for both the leeway band and the strong-buy
     tier, so the two stay consistent rather than each having its own
@@ -586,6 +599,9 @@ def get_effective_sigma(cache, token, threshold):
     fewer than 3 days)."""
     hist_key = f"{token}__history"
     values = cache.get(hist_key, {}).get("values", [])
+    cap = LEEWAY_WINDOW_OVERRIDES.get(token)
+    if cap:
+        values = values[-cap:]
     n = len(values)
     if n >= NEAR_STDEV_MIN_DAYS:
         sigma = compute_stdev(values)
@@ -760,16 +776,20 @@ def _get_json(url, headers=None, timeout=15):
 
 
 # ---------------------------------------------------------------------------
-# Coin Metrics Community "fresh cross-check" -- SHADOW MODE. Display only.
-# Independent, keyless, ~1-day-fresh derivation of MVRV Z, Puell and Realized Price, shown
-# as a small caption next to the BGeometrics reading. It is NEVER scored, never written to
-# any *_history array or the cache, never used by a verdict/tier/tranche/divergence, and
-# never substituted for (or used as a fallback for) the BGeometrics reading, in either
-# direction. Any failure -> "cross-check unavailable".
-# Coin Metrics free tier has no CapRealUSD, so: realized cap = market cap / MVRV;
-# Z = (market cap - realized cap) / expanding population std of market cap (BGeometrics'
-# own definition, window unstated; expanding reproduces their 2026 values); realized price =
-# realized cap / supply; Puell = daily issuance USD / mean of trailing 365 days incl. today.
+# Coin Metrics Community data -- PRIMARY (scoring) source for MVRV Z-Score, Puell Multiple and
+# Realized Price. Why: since ~11 Sep 2026 the free BGeometrics tier serves these three ~7 days late;
+# Coin Metrics is ~1 day behind (yesterday's complete UTC day). Keyless, CC BY-NC 4.0.
+# Coin Metrics' free tier has no CapRealUSD, so: realized cap = market cap / MVRV;
+# Z = (market cap - realized cap) / expanding population std of market cap (BGeometrics' own
+# definition, window unstated; expanding reproduces their 2026 values); realized price = realized
+# cap / supply; Puell = daily issuance USD / mean of trailing 365 days incl. today.
+#
+# Source separation: the CM values live in their OWN history arrays (MVRV_Z_CM__history, PUELL_CM__history,
+# REALIZED_PRICE_CM__history), rebuilt every run from the freshly fetched series with true data dates.
+# They are never mixed with the BGeometrics arrays (MVRV_Z__history keeps accumulating the BG
+# cross-check value; PUELL__history / REALIZED_PRICE__history are frozen). No fallback to BGeometrics
+# for scoring in either direction: if Coin Metrics fails, the cached CM reading is shown as STALE and
+# excluded from the verdict like any other STALE reading.
 # ---------------------------------------------------------------------------
 CM_BASE = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
 CM_METRICS = ("CapMVRVCur", "CapMrktCurUSD", "IssTotUSD", "SplyCur")
@@ -777,11 +797,31 @@ CM_MAX_PAGES = 6                 # budget: at most ~6 requests per run
 CM_PAGE_GAP_SECONDS = 0.7        # free tier: 10 requests / 6 seconds
 CM_MAX_AGE_DAYS = 3              # latest row older than this -> unavailable (stale)
 CM_TOKENS = ("MVRV_Z", "PUELL", "REALIZED_PRICE")
+# scoring token -> its Coin Metrics history/cache key base (history key = f"{base}__history")
+CM_HIST_TOKENS = {"MVRV_Z": "MVRV_Z_CM", "PUELL": "PUELL_CM", "REALIZED_PRICE": "REALIZED_PRICE_CM"}
 CM_ATTRIBUTION = (
-    'Cross-check data: Coin Metrics Community Data, licensed '
+    'Coin Metrics Community Data, licensed '
     '<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank">CC BY-NC 4.0</a>'
     ' (non-commercial; source: coinmetrics.io). Values shown are derived and modified by this dashboard.'
 )
+
+# Feature flags, both OFF. While False:
+#  - the adaptive MVRV threshold never affects scoring or tranches (fixed <= 0.0 stays in force) even
+#    though >= 365 days of Coin Metrics history now exist; it is computed and logged in SHADOW only;
+#  - MVRV Momentum is not part of WEIGHT_MAP_MOMENTUM (display only, labelled shadow / not scored).
+# Turning either on is a deliberate, separate decision (see README, Known limitations).
+MVRV_ADAPTIVE_THRESHOLD_ACTIVE = False
+MVRV_MOMENTUM_LIVE = False
+# Marker on NEW VERDICT_HISTORY rows only: scoring inputs for MVRV Z / Puell / Realized Price switched from
+# BGeometrics (~7 days old) to Coin Metrics (~1 day old) on this date. Old rows are never rewritten.
+CM_SOURCE_BREAK_MARKER = "cm-2026-11"
+SHADOW_WINDOWS = (("730", 730), ("1460", 1460), ("full", None))
+SHADOW_LOG_MAX = 400
+
+
+def cm_hist_token(token):
+    """History-array key base for a scoring token (Coin Metrics key for the three migrated tokens)."""
+    return CM_HIST_TOKENS.get(token, token)
 
 
 def fetch_coinmetrics_rows():
@@ -800,9 +840,10 @@ def fetch_coinmetrics_rows():
     raise ValueError("Coin Metrics history exceeded page budget")
 
 
-def derive_coinmetrics_crosscheck(rows, run_date=None):
-    """rows -> {"MVRV_Z": (value, "YYYY-MM-DD"), "PUELL": ..., "REALIZED_PRICE": ...}
-    or raises ValueError('reason') -- missing metric, malformed rows, or stale latest date."""
+def derive_coinmetrics_series(rows, run_date=None):
+    """rows -> {"MVRV_Z": {date: z}, "PUELL": {date: p}, "REALIZED_PRICE": {date: rp}, "latest": date}.
+    Raises ValueError('reason') on malformed rows, a missing metric, a stale latest row (older than
+    CM_MAX_AGE_DAYS) or too little history."""
     run_date = run_date or run_date_utc()
     recs = []
     for r in rows:
@@ -818,10 +859,8 @@ def derive_coinmetrics_crosscheck(rows, run_date=None):
     age = (run_date - latest).days
     if age > CM_MAX_AGE_DAYS:
         raise ValueError(f"stale: latest row {latest} is {age} days old")
-    # Z / realized price from days that have market cap, MVRV and supply
     n = sx = sx2 = 0.0
-    z = rp = None
-    z_date = None
+    z, rp = {}, {}
     for d, m in recs:
         mc, mv, sp = m["CapMrktCurUSD"], m["CapMVRVCur"], m["SplyCur"]
         if mc is None or not mv or not sp:
@@ -829,48 +868,172 @@ def derive_coinmetrics_crosscheck(rows, run_date=None):
         n += 1
         sx += mc
         sx2 += mc * mc
-        if d == latest:
-            rc = mc / mv
-            sd = math.sqrt(max((sx2 - sx * sx / n) / n, 0.0))
-            if n < 30 or not sd:
-                raise ValueError("insufficient history for Z")
-            z, rp, z_date = (mc - rc) / sd, rc / sp, d
-    if z is None:
-        raise ValueError(f"latest row {latest} lacks MVRV/market cap/supply")
-    # Puell on the latest day: needs 365 consecutive daily issuance values
+        if n < 30:
+            continue
+        sd = math.sqrt(max((sx2 - sx * sx / n) / n, 0.0))
+        if not sd:
+            continue
+        rc = mc / mv
+        z[d] = (mc - rc) / sd
+        rp[d] = rc / sp
     iss = {d: m["IssTotUSD"] for d, m in recs if m["IssTotUSD"] is not None}
-    window = [iss.get(latest - timedelta(days=i)) for i in range(365)]
-    if any(v is None for v in window):
-        raise ValueError("Puell: issuance history incomplete")
-    puell = window[0] / (sum(window) / 365)
-    return {"MVRV_Z": (round(z, 3), z_date.isoformat()),
-            "PUELL": (round(puell, 3), latest.isoformat()),
-            "REALIZED_PRICE": (round(rp), z_date.isoformat())}
+    isd = sorted(iss)
+    puell = {}
+    run = 0.0
+    for i, d in enumerate(isd):
+        run += iss[d]
+        if i >= 365:
+            run -= iss[isd[i - 365]]
+        if i >= 364 and (d - isd[i - 364]).days == 364:
+            puell[d] = iss[d] / (run / 365)
+    for name, ser in (("MVRV/market cap/supply", z), ("issuance", puell)):
+        if latest not in ser:
+            raise ValueError(f"latest row {latest} lacks {name} (missing metric or history)")
+    if len(z) < MVRV_ADAPTIVE_MIN_DAYS:
+        raise ValueError(f"short history: {len(z)} days of Z")
+    return {"MVRV_Z": z, "PUELL": puell, "REALIZED_PRICE": rp, "latest": latest}
+
+
+def derive_coinmetrics_crosscheck(rows, run_date=None):
+    """Latest-day view of derive_coinmetrics_series(): {token: (value, 'YYYY-MM-DD')}."""
+    ser = derive_coinmetrics_series(rows, run_date)
+    d = ser["latest"].isoformat()
+    return {"MVRV_Z": (round(ser["MVRV_Z"][ser["latest"]], 3), d),
+            "PUELL": (round(ser["PUELL"][ser["latest"]], 3), d),
+            "REALIZED_PRICE": (round(ser["REALIZED_PRICE"][ser["latest"]]), d)}
+
+
+def rebuild_cm_history(cache, hist_token, series, round_to=6):
+    """(Re)build cache[f"{hist_token}__history"] from a {date: value} series with TRUE data dates, trimmed
+    to the length existing consumers expect. No run-date dedup, no accumulation: the array is a pure
+    function of the freshly fetched series."""
+    max_len = HISTORY_MAX_LEN_OVERRIDES.get(hist_token, HISTORY_MAX_LEN)
+    items = sorted(series.items())[-max_len:]
+    cache[f"{hist_token}__history"] = {
+        "values": [round(float(v), round_to) for _, v in items],
+        "dates": [d.isoformat() for d, _ in items],
+        "last_date": items[-1][0].isoformat() if items else None,
+        "source": "coinmetrics",
+    }
+
+
+def shadow_adaptive_thresholds(z_series, as_of, percentile=None):
+    """Walk-forward adaptive MVRV thresholds (trailing data up to as_of only) for each SHADOW_WINDOWS
+    window at the adaptive percentile. None per window while < MVRV_ADAPTIVE_MIN_DAYS points exist."""
+    percentile = MVRV_ADAPTIVE_PERCENTILE if percentile is None else percentile
+    vals = [z_series[d] for d in sorted(z_series) if d <= as_of]
+    out = {}
+    for label, win in SHADOW_WINDOWS:
+        if len(vals) < MVRV_ADAPTIVE_MIN_DAYS:
+            out[label] = None
+        else:
+            out[label] = compute_percentile(vals if win is None else vals[-win:], percentile)
+    return out
+
+
+_TIER_SHORT = {"st-strong-buy": "STRONG BUY", "st-buy": "BUY ZONE", "st-near": "BORDERLINE", "st-no": "NOT YET"}
+
+
+def cm_scoring_inputs(values, cache, run_date=None):
+    """Fetch Coin Metrics and set the PRIMARY scoring readings for MVRV Z, Puell and Realized Price.
+    Never raises. On failure uses the cached CM reading labelled STALE (data date shown) and never
+    falls back to BGeometrics."""
+    series = None
+    try:
+        series = derive_coinmetrics_series(fetch_coinmetrics_rows(), run_date)
+        values["CM_STATE"] = "ok"
+    except Exception as e:                                   # timeout, 429, bad JSON, stale, short history ...
+        values["CM_STATE"] = "unavailable"
+        print(f"  Coin Metrics unavailable ({e}); using cached Coin Metrics readings, labelled STALE")
+    values["CM_ATTRIBUTION"] = f'<div class="manual-line">Source: {CM_ATTRIBUTION}</div>' if series else ""
+    specs = {"MVRV_Z": ("low", 0.0, 4), "PUELL": ("low", 0.5, 4), "REALIZED_PRICE": (None, None, 2)}
+    for token, (direction, threshold, nd) in specs.items():
+        ht = cm_hist_token(token)
+        values[f"{token}_SRC"] = "CM"
+        if series:
+            latest = series["latest"]
+            ser = series[token]
+            val = round(ser[latest], nd)
+            rebuild_cm_history(cache, ht, ser)
+            cache_store(cache, ht, val, data_date=latest.isoformat())
+            values[token] = val
+            values[f"{token}_AS_OF"] = latest.isoformat()
+            if direction is not None:
+                label, css = status_pill(val, direction, threshold, cache=cache, token=ht)
+            else:
+                label, css = "CHECK", "st-mid"          # Realized Price status is set from spot in main()
+        else:
+            cached_val, cached_date = cache_lookup(cache, ht)
+            if cached_val is not None:
+                values[token] = cached_val
+                values[f"{token}_AS_OF"] = cache_data_date(cache, ht)
+                label, css = f"STALE ({cached_date})", "st-mid"
+            else:
+                values[token] = None
+                values[f"{token}_AS_OF"] = None
+                label, css = "CHECK", "st-mid"
+        values[f"{token}_STATUS_LABEL"] = label
+        values[f"{token}_STATUS_CLASS"] = css
+        values[f"{token}_TARGET"] = target_for(token)
+        print(f"  {token} (Coin Metrics, {values.get(token + '_AS_OF')}): {values[token]} -> {label}")
+    # SHADOW adaptive thresholds (never scored)
+    values["MVRV_Z_SHADOW"] = None
+    values["MVRV_Z_SHADOW_CAPTION"] = ""
+    if series:
+        z_now = series["MVRV_Z"][series["latest"]]
+        thr = shadow_adaptive_thresholds(series["MVRV_Z"], series["latest"])
+        stat = {}
+        for k, t in thr.items():
+            if t is None:
+                stat[k] = None
+            else:
+                stat[k] = _TIER_SHORT.get(status_pill(z_now, "low", t, cache=cache, token="MVRV_Z_CM")[1], "NOT YET")
+        values["MVRV_Z_SHADOW"] = {"z": round(z_now, 4), "thresholds": {k: (None if v is None else round(v, 4)) for k, v in thr.items()},
+                                   "statuses": stat, "data_date": series["latest"].isoformat()}
+        if thr.get("1460") is not None:
+            tip = "shadow, not scored. " + "; ".join(f"{k}d: {thr[k]:.2f} -> {stat[k].lower()}" if k != "full" else f"full: {thr[k]:.2f} -> {stat[k].lower()}" for k in thr if thr[k] is not None)
+            values["MVRV_Z_SHADOW_CAPTION"] = (f'<div class="xcheck" title="{tip}">adaptive, shadow, not scored: '
+                                               f'1460d = {thr["1460"]:.2f} -> {stat["1460"].lower()}</div>')
+    return series
+
+
+def record_shadow_log(cache, values, run_date=None):
+    """Append (or same-day replace) one SHADOW_LOG entry: date, Z, shadow thresholds, would-be statuses and
+    the MVRV Momentum would-be status. Observation only; nothing reads this to score."""
+    sh = values.get("MVRV_Z_SHADOW")
+    if not sh:
+        return
+    day = (run_date or run_date_utc()).isoformat()
+    entry = {"date": day, "data_date": sh["data_date"], "mvrv_z": sh["z"], "thresholds": sh["thresholds"],
+             "statuses": sh["statuses"],
+             "momentum_would_be": values.get("MVRV_MOMENTUM_SHADOW_LABEL")}
+    log = cache.setdefault("SHADOW_LOG", [])
+    if log and log[-1].get("date") == day:
+        log[-1] = entry
+    else:
+        log.append(entry)
+    del log[:-SHADOW_LOG_MAX]
 
 
 def crosscheck_caption_html(values, token):
-    """Informational caption under a reading; empty for tokens without a cross-check."""
-    if token not in CM_TOKENS or "CM_XCHECK_STATE" not in values:
+    """Table 1 secondary captions under the MVRV Z reading: the BGeometrics background cross-check
+    (informational) and the adaptive-threshold shadow line. Empty for every other token."""
+    if token != "MVRV_Z":
         return ""
-    if values["CM_XCHECK_STATE"] != "ok" or values.get("CM_XCHECK", {}).get(token) is None:
-        return '<div class="xcheck">derived from Coin Metrics data: unavailable</div>'
-    v, asof = values["CM_XCHECK"][token]
-    shown = f"${v:,.0f}" if token == "REALIZED_PRICE" else f"{v:.2f}"
-    return f'<div class="xcheck">derived from Coin Metrics data (as of {asof}): {shown} <span class="xcheck-tag">informational, not scored</span></div>'
-
-
-def run_coinmetrics_crosscheck(values, run_date=None):
-    """Fetch + derive; never raises. Writes values["CM_XCHECK_STATE"] ('ok'|'unavailable'),
-    values["CM_XCHECK"] and values["CM_ATTRIBUTION"] (only shown when something is displayed)."""
-    try:
-        res = derive_coinmetrics_crosscheck(fetch_coinmetrics_rows(), run_date)
-        values["CM_XCHECK_STATE"], values["CM_XCHECK"] = "ok", res
-        print("  Coin Metrics cross-check: " + ", ".join(f"{k}={v[0]} ({v[1]})" for k, v in res.items()))
-    except Exception as e:                                   # timeout, 429, bad JSON, stale, ...
-        values["CM_XCHECK_STATE"], values["CM_XCHECK"] = "unavailable", {}
-        print(f"  Coin Metrics cross-check unavailable: {e}")
-    values["CM_ATTRIBUTION"] = (f'<div class="manual-line">{CM_ATTRIBUTION}</div>'
-                                if values["CM_XCHECK_STATE"] == "ok" else "")
+    bg = values.get("MVRV_Z_BG")
+    if bg is None:
+        out = '<div class="xcheck">BGeometrics cross-check unavailable</div>'
+    else:
+        stamp = values.get("MVRV_Z_BG_AS_OF")
+        n = data_age_days(stamp)
+        when = f"as of {parse_data_date(stamp).isoformat()} ({n} {'day' if n == 1 else 'days'} old)" if n is not None else "as of unknown"
+        try:
+            shown = f"{float(bg):.2f}"
+        except (TypeError, ValueError):
+            shown = str(bg)
+        out = (f'<div class="xcheck">BGeometrics cross-check ({when}): {shown} '
+               f'<span class="xcheck-tag">informational, not scored</span></div>')
+    return out + (values.get("MVRV_Z_SHADOW_CAPTION") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -2078,11 +2241,11 @@ TOOLTIP_TEXT = {
     "REALIZED_PRICE": 'Average cost basis of every coin. <strong>Not counted in the weighted verdict</strong> — mathematically the un-normalized version of MVRV Z-Score (spot ÷ realized price IS the MVRV ratio), so scoring both would double-count one signal.',
     "PUELL": 'Daily miner issuance value vs. its 365-day average. Ties valuation to real mining economics — genuinely independent from the on-chain price-ratio cluster above.',
     "RESERVE_RISK": 'Price relative to long-term holder conviction (accumulated coin-days vs. price). Thinner public track record than MVRV/Puell, hence a discounted weight.',
-    "LTH_SOPR": 'Long-term holders spending at profit (&gt;1) or loss (&lt;1). A behavioral confirmation signal — tends to lag the actual low rather than lead it.',
+    "LTH_SOPR": 'Long-term holders spending at profit (&gt;1) or loss (&lt;1). A behavioral confirmation signal — tends to lag the actual low rather than lead it. No free source fresher than the BGeometrics free tier was found (Nov 2026); readings can be up to ~7 days old, see the age caption.',
     "THERMOCAP": 'Market cap vs. cumulative miner revenue ever paid. No globally-agreed fixed threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older market — see README for the research behind this. Scored at reduced (Tier 3) weight until then.',
-    "NRPL": 'Net Realized P&amp;L in BTC — realized profit minus realized loss; deeply negative means capitulation dominates. No fixed published threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older, smaller network — see README. Scored at reduced (Tier 3) weight until then.',
+    "NRPL": 'Net Realized P&amp;L in BTC — realized profit minus realized loss; deeply negative means capitulation dominates. No fixed published threshold exists, so this computes its own: the bottom 10th percentile of its own trailing daily history, once at least 90 days have accumulated. Self-normalizing rather than anchored to an older, smaller network — see README. Scored at reduced (Tier 3) weight until then. No free source fresher than the BGeometrics free tier was found (Nov 2026); readings can be up to ~7 days old, see the age caption.',
     "SUPPLY_LOSS": 'Share of circulating BTC below cost basis (derived: 100 − Supply in Profit). The metric this whole project started from.',
-    "ASOPR_EST": 'SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode\'s own published mechanism, not a raw substitute for the real metric.',
+    "ASOPR_EST": 'SOPR with the ~1.0-ratio "under 1hr" volume mathematically de-diluted out — derived from Glassnode\'s own published mechanism, not a raw substitute for the real metric. No free source fresher than the BGeometrics free tier was found (Nov 2026); readings can be up to ~7 days old, see the age caption.',
     "PROD_COST": 'Live hashrate/difficulty × Cambridge CBECI\'s $0.05/kWh assumption + 20 J/TH blended efficiency. Reads lower than "all-in" bank headlines (e.g. JPMorgan\'s ~$78K), which add hardware depreciation — different scope, not a contradiction.',
     "MAYER": 'Price ÷ 200-day moving average. Simple, blunt, generic across any asset — lowest weight tier for that reason.',
     "DRAWDOWN": "% below all-time high ($126,296, Oct 2025). Buy-favorable at or beyond -77% (the shallow edge of the past-cycle-bottom analog range). <strong>Not weighted</strong> — an analog-based threshold, not a mathematically-derived one, so it gets a real live status but no scoring weight.",
@@ -2606,7 +2769,7 @@ def build_full_weighted_breakdown_top(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "—" if reading_val is None else reading_val
-        reading_val = f"{reading_val}{asof_caption_html(values, token)}{crosscheck_caption_html(values, token)}"
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -3159,12 +3322,14 @@ def _compute_tranche_data(values, cache):
     # live yet, else the same fixed 0.0 fallback the rest of the page is
     # using today — always the SAME threshold actually in effect, not a
     # second, disconnected copy of the logic) + Puell Multiple.
-    mvrv_thr, _mvrv_n = get_adaptive_mvrv_threshold(cache)
+    mvrv_thr = None
+    if MVRV_ADAPTIVE_THRESHOLD_ACTIVE:
+        mvrv_thr, _mvrv_n = get_adaptive_mvrv_threshold(cache, hist_token=cm_hist_token("MVRV_Z"))
     if mvrv_thr is None:
         mvrv_thr = BG_METRICS["MVRV_Z"][2]
     puell_dir, puell_thr = BG_METRICS["PUELL"][1], BG_METRICS["PUELL"][2]
-    mvrv_days = (consecutive_buy_days(cache, "MVRV_Z", "low", mvrv_thr) or 0) if mvrv_thr is not None else 0
-    puell_days = (consecutive_buy_days(cache, "PUELL", puell_dir, puell_thr) or 0) if puell_thr is not None else 0
+    mvrv_days = (consecutive_buy_days(cache, cm_hist_token("MVRV_Z"), "low", mvrv_thr) or 0) if mvrv_thr is not None else 0
+    puell_days = (consecutive_buy_days(cache, cm_hist_token("PUELL"), puell_dir, puell_thr) or 0) if puell_thr is not None else 0
 
     # Tranche 3 — All Clear: Hash Ribbons flipping from CAPITULATION to its
     # recovery/BUY SIGNAL state. Categorical, not threshold-based, so this
@@ -3368,7 +3533,7 @@ def _nearest_dated_history_value(dates, values, target_date, tolerance_days):
 
 def detect_mvrv_price_divergence(cache, dated_price_history,
                                   lookback_days=MVRV_DIVERGENCE_LOOKBACK_DAYS,
-                                  swing_window=MVRV_DIVERGENCE_SWING_WINDOW):
+                                  swing_window=MVRV_DIVERGENCE_SWING_WINDOW, hist_token="MVRV_Z"):
     """Returns a dict describing the divergence check -- always includes
     "available" (bool); when True, also "divergence" (bool) and "point1"/
     "point2" (each (date, price, z_score)); when False, "reason" (str)
@@ -3386,7 +3551,7 @@ def detect_mvrv_price_divergence(cache, dated_price_history,
         }
     first_min, second_min = minima[-2], minima[-1]
 
-    mvrv_hist = cache.get("MVRV_Z__history", {})
+    mvrv_hist = cache.get(f"{hist_token}__history", {})
     mvrv_dates, mvrv_values = mvrv_hist.get("dates", []), mvrv_hist.get("values", [])
     z1 = _nearest_dated_history_value(mvrv_dates, mvrv_values, first_min[0], MVRV_DIVERGENCE_DATE_TOLERANCE_DAYS)
     z2 = _nearest_dated_history_value(mvrv_dates, mvrv_values, second_min[0], MVRV_DIVERGENCE_DATE_TOLERANCE_DAYS)
@@ -3792,7 +3957,7 @@ def build_full_weighted_breakdown_momentum(values, cache):
         else:
             reading_val = values.get(token)
             reading_val = "—" if reading_val is None else reading_val
-        reading_val = f"{reading_val}{asof_caption_html(values, token)}{crosscheck_caption_html(values, token)}"
+        reading_val = f"{reading_val}{asof_caption_html(values, token)}"
 
         caveat = NAME_CAVEAT.get(token, "")
         caveat_html = f' <span class="caveat">{caveat}</span>' if caveat else ""
@@ -3997,9 +4162,31 @@ def main():
     if not BG_KEY:
         print(f"! BGEOMETRICS_API_KEY not set — those {len(BG_METRICS)} rows will show CHECK.")
 
-    print(f"Fetching {len(BG_METRICS)} indicators from BGeometrics...")
+    print("Fetching Coin Metrics Community data (primary source for MVRV Z, Puell, Realized Price; keyless)...")
+    cm_scoring_inputs(values, cache)
+
+    n_bg = len([t for t in BG_METRICS if t not in CM_HIST_TOKENS or t == "MVRV_Z"])
+    print(f"Fetching {n_bg} indicators from BGeometrics (Puell and Realized Price are scored from Coin Metrics instead)...")
     for token, (slug, direction, threshold) in BG_METRICS.items():
+        if token in CM_HIST_TOKENS and token != "MVRV_Z":
+            print(f"  {token}: scored from Coin Metrics; BGeometrics fetch skipped (its old history array stays frozen)")
+            continue
         val, data_date = fetch_bg_latest(slug)
+        if token == "MVRV_Z":
+            # Background cross-check ONLY: keeps feeding the BG-sourced MVRV_Z__history array, shown as a
+            # secondary caption. Never read for scoring, never mixed into the Coin Metrics arrays.
+            if val is not None:
+                cache_store(cache, token, val, data_date=data_date)
+                try:
+                    history_append(cache, token, float(val))
+                except (TypeError, ValueError):
+                    pass
+                values["MVRV_Z_BG"], values["MVRV_Z_BG_AS_OF"] = val, data_date
+            else:
+                cached_val, _cd = cache_lookup(cache, token)
+                values["MVRV_Z_BG"], values["MVRV_Z_BG_AS_OF"] = cached_val, cache_data_date(cache, token)
+            print(f"  MVRV_Z BGeometrics cross-check ({slug}): {values['MVRV_Z_BG']} (as of {values['MVRV_Z_BG_AS_OF']}); not scored")
+            continue
         if val is not None:
             cache_store(cache, token, val, data_date=data_date)
             values[f"{token}_AS_OF"] = data_date
@@ -4030,8 +4217,6 @@ def main():
     # here, before the PERCENTILE_ELIGIBLE loop below, so it can join that
     # same generic rolling-percentile/WEIGHT_MAP machinery Thermocap and
     # NRPL already use — no separate mechanism needed.
-    print("Fetching Coin Metrics Community cross-check (display only, keyless)...")
-    run_coinmetrics_crosscheck(values)
     print("Fetching full Active Addresses history (BGeometrics chart data, unmetered)...")
     aa_points = fetch_active_addresses_full_history()
     if aa_points:
@@ -4115,10 +4300,13 @@ def main():
     # output. Below the 365-day gate, the BG_METRICS loop's own fixed-0.0
     # result (status/target already set above) is left completely alone --
     # this block only overrides when the adaptive number is actually real.
-    mvrv_threshold, mvrv_n = get_adaptive_mvrv_threshold(cache)
+    mvrv_n = len(cache.get(f"{cm_hist_token('MVRV_Z')}__history", {}).get("values", []))
+    mvrv_threshold = None
+    if MVRV_ADAPTIVE_THRESHOLD_ACTIVE:
+        mvrv_threshold, mvrv_n = get_adaptive_mvrv_threshold(cache, hist_token=cm_hist_token("MVRV_Z"))
     mvrv_val = values.get("MVRV_Z")
-    if mvrv_threshold is not None and mvrv_val is not None:
-        label, css = status_pill(mvrv_val, "low", mvrv_threshold, cache=cache, token="MVRV_Z")
+    if mvrv_threshold is not None and mvrv_val is not None and not str(values.get("MVRV_Z_STATUS_LABEL", "")).startswith("STALE"):
+        label, css = status_pill(mvrv_val, "low", mvrv_threshold, cache=cache, token=cm_hist_token("MVRV_Z"))
         values["MVRV_Z_STATUS_LABEL"] = label
         values["MVRV_Z_STATUS_CLASS"] = css
         values["MVRV_Z_TARGET"] = (
@@ -4129,11 +4317,12 @@ def main():
               f"{round(mvrv_threshold, 2)} (n={mvrv_n}) -> {label}")
     else:
         values["MVRV_Z_TARGET"] = (
-            f"{target_for('MVRV_Z')} (fixed \u2014 building adaptive history, "
-            f"{mvrv_n}/{MVRV_ADAPTIVE_MIN_DAYS} days)"
+            f"{target_for('MVRV_Z')} (fixed; adaptive threshold runs in shadow only, not scored)"
+            if not MVRV_ADAPTIVE_THRESHOLD_ACTIVE else
+            f"{target_for('MVRV_Z')} (fixed \u2014 building adaptive history, {mvrv_n}/{MVRV_ADAPTIVE_MIN_DAYS} days)"
         )
-        print(f"  MVRV_Z: only {mvrv_n}/{MVRV_ADAPTIVE_MIN_DAYS} days of adaptive history "
-              f"accumulated, staying on fixed 0.0 threshold")
+        print(f"  MVRV_Z: fixed 0.0 threshold in force (MVRV_ADAPTIVE_THRESHOLD_ACTIVE={MVRV_ADAPTIVE_THRESHOLD_ACTIVE}, "
+              f"n={mvrv_n} Coin Metrics days); adaptive thresholds logged in shadow")
 
     # Supply in Loss = 100 - % Supply in Profit (BGeometrics only exposes
     # the profit side under this slug; the loss framing is the one your
@@ -4448,7 +4637,7 @@ def main():
     values["TRANCHE_STATUS_HTML"] = build_tranche_status(values, cache, tranche_data=tranche_data)
 
     print("Checking MVRV-Z / price divergence pattern...")
-    divergence_result = detect_mvrv_price_divergence(cache, price_history_dated)
+    divergence_result = detect_mvrv_price_divergence(cache, price_history_dated, hist_token=cm_hist_token("MVRV_Z"))
     values["DIVERGENCE_CARD_HTML"] = build_divergence_card_html(divergence_result)
     print(f"  Divergence: {'available, ' + ('DETECTED' if divergence_result.get('divergence') else 'no divergence') if divergence_result['available'] else 'N/A — ' + divergence_result['reason']}")
 
@@ -4510,12 +4699,17 @@ def main():
     print("  Checking MVRV Momentum (current Z-Score vs. own trailing 365d MA, AND still falling short-term)...")
     mvrv_val_for_mom = values.get("MVRV_Z")
     label, css, mvrv_mom_ma, mvrv_mom_n, mvrv_mom_today_avg, mvrv_mom_past_avg = \
-        classify_mvrv_momentum(cache, mvrv_val_for_mom)
+        classify_mvrv_momentum(cache, mvrv_val_for_mom, hist_token=cm_hist_token("MVRV_Z"))
     if mvrv_mom_ma is not None and mvrv_val_for_mom is not None:
         values["MVRV_MOMENTUM"] = mvrv_val_for_mom
         values["MVRV_MOMENTUM_AS_OF"] = values.get("MVRV_Z_AS_OF")
-        values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = label
-        values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = css
+        values["MVRV_MOMENTUM_SHADOW_LABEL"] = label
+        if MVRV_MOMENTUM_LIVE:
+            values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = label
+            values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = css
+        else:
+            values["MVRV_MOMENTUM_MOM_STATUS_LABEL"] = f"SHADOW, NOT SCORED (would read: {str(label).lower()})"
+            values["MVRV_MOMENTUM_MOM_STATUS_CLASS"] = "st-mid"
         trend_note = (
             f", AND falling vs. {MVRV_MOMENTUM_TREND_LOOKBACK_DAYS}d ago "
             f"({round(mvrv_mom_today_avg, 2)} vs {round(mvrv_mom_past_avg, 2)}, "
@@ -4525,8 +4719,11 @@ def main():
         )
         values["MVRV_MOMENTUM_MOM_TARGET"] = (
             f"≤ {round(mvrv_mom_ma, 2)} (own trailing {MVRV_MOMENTUM_WINDOW_DAYS}d MA, live, n={mvrv_mom_n}){trend_note}"
+            if MVRV_MOMENTUM_LIVE else
+            f"shadow, not scored: ≤ {round(mvrv_mom_ma, 2)} (own trailing {MVRV_MOMENTUM_WINDOW_DAYS}d MA, n={mvrv_mom_n}){trend_note}"
         )
-        WEIGHT_MAP_MOMENTUM["MVRV_MOMENTUM"] = 1.5  # Tier 3, same as Thermocap/NRPL's own bootstrap weight
+        if MVRV_MOMENTUM_LIVE:
+            WEIGHT_MAP_MOMENTUM["MVRV_MOMENTUM"] = 1.5  # Tier 3, same as Thermocap/NRPL's own bootstrap weight
         print(f"    MVRV Momentum: Z={mvrv_val_for_mom} vs 365d MA={round(mvrv_mom_ma, 2)} (n={mvrv_mom_n}) -> {label}")
     else:
         values["MVRV_MOMENTUM"] = mvrv_val_for_mom
@@ -4536,6 +4733,7 @@ def main():
         values["MVRV_MOMENTUM_MOM_TARGET"] = f"N/A — building history ({mvrv_mom_n}/{MVRV_MOMENTUM_MIN_DAYS} days)"
         print(f"    MVRV Momentum: only {mvrv_mom_n}/{MVRV_MOMENTUM_MIN_DAYS} days of history accumulated, staying N/A")
 
+    record_shadow_log(cache, values)
     print("Building Table 2 (Momentum Shift) verdict synthesis...")
     values["FULL_WEIGHTED_BREAKDOWN_ROWS_MOM"] = build_full_weighted_breakdown_momentum(values, cache)
     values["WEIGHT_PIE_SVG_MOM"] = build_weight_pie_svg_momentum(values)
@@ -4599,9 +4797,9 @@ def main():
     TOP_PERCENTILE_WEIGHTS = {"MVRV_Z": 1.5, "PUELL": 1.5, "THERMOCAP": 1.0}
     for token, join_weight in TOP_PERCENTILE_WEIGHTS.items():
         fresh_val = values.get(token)
-        threshold, n_points = rolling_threshold(cache, token, percentile=100 - PERCENTILE_CUTOFF)
-        if threshold is not None and fresh_val is not None:
-            label, css = status_pill(fresh_val, "high", threshold, cache=cache, token=token)
+        threshold, n_points = rolling_threshold(cache, cm_hist_token(token), percentile=100 - PERCENTILE_CUTOFF)
+        if threshold is not None and fresh_val is not None and not str(values.get(f"{token}_STATUS_LABEL", "")).startswith("STALE"):
+            label, css = status_pill(fresh_val, "high", threshold, cache=cache, token=cm_hist_token(token))
             values[f"{token}_TOP_STATUS_LABEL"] = label
             values[f"{token}_TOP_STATUS_CLASS"] = css
             values[f"{token}_TOP_TARGET"] = f"≥ {round(threshold, 2)} (live, {100 - PERCENTILE_CUTOFF}th pct. of trailing {n_points}d)"
@@ -4679,6 +4877,7 @@ def main():
         _numeric_or_none(verdict_mom.get("VERDICT_PCT_MOM")),
         _numeric_or_none(verdict_top.get("VERDICT_PCT_TOP")),
         source="live",
+        data_source=CM_SOURCE_BREAK_MARKER,
     )
     values["VERDICT_TREND_HTML"] = build_verdict_trend_html(cache)
     print(f"  VERDICT_HISTORY now has {len(cache.get('VERDICT_HISTORY', []))} days of accumulated data")
