@@ -292,3 +292,26 @@ support yet.
 **(d) BGeometrics free-tier lag.** Since about 11 Sep 2026 the free tier's on-chain readings have been about 7 days old (about 1 day before that). Each reading now carries an "as of YYYY-MM-DD (N days old)" caption, and a banner appears when any series is more than 2 days old. A display-only "derived from Coin Metrics data" caption on MVRV Z-Score, Puell and Realized Price gives a roughly 1-day-fresh comparison; it is not scored and never replaces the BGeometrics reading.
 
 **(e) Coin Metrics licence.** Coin Metrics Community data is licensed CC BY-NC 4.0 (non-commercial, attribution required). The values shown are derived and modified by this dashboard, and the footer says so. Use is personal and non-commercial only.
+
+## Trend history provenance
+
+The three trend lines (Cycle Bottom, Momentum Shift, Cycle Top) are stored in `VERDICT_HISTORY` inside `last_known_good.json`, one row per day, each with a `source` tag. Since the 16 Nov 2026 history rebuild the series runs without gaps from 1 Jun to the present. The chart ignores the tag; it is there for audit.
+
+| Source tag | Dates | What it is |
+|---|---|---|
+| `backtest_seed_v2` | 1 Jun - 31 Jul 2026 | Backtest rebuilt from the daily-matrix tiers (see below). Replaces the original v1 seeds. |
+| `backtest_reconstructed` | 1 - 4 Aug 2026 | Walk-forward reconstruction, partial coverage (see below). Extra optional fields: `weight_coverage`, `lower`, `upper`, `note`. |
+| `live_recovered` | 5 - 17 Aug 2026 | Read back from the committed `dashboard.html` of each day (verdict text and pie counts). |
+| `live` | 18 Aug 2026 onward | Written by the daily run. |
+
+**Why the v1 seeds (`backtest_seed`, archived) were off.** They were generated on 17 Aug 2026 from `backtest_indicators.py --daily-matrix`, before three corrections: (1) the BGeometrics one-day production lag was not applied (a run on day D only sees values dated D-1; the lag landed in commit 088195f); (2) the Momentum Shift seed pool was 4.0 and included MVRV Momentum, which read BUY on all 61 days under the old level-only rule and is not scored on the live board, so Momentum was 37.5% or 62.5% instead of 0% or 40%; (3) the Blockchain.com price series is stamped one day late (the value dated d is the close of d-1), so price-derived tiers lagged by a day. The Cycle Top seed was 0.0% on every day and is unchanged.
+
+**v2 rebasing.** Cycle Bottom and Cycle Top: the BGeometrics-sourced tiers are shifted forward one day, then re-scored with the real verdict functions (this is done at tier level, because the matrices store tiers, not values, so thresholds and sigma bands are not recomputed; 1 Jun uses same-day tiers because no 31 May row exists). Cycle Bottom changes on 33 of 61 days (mean absolute change 2.8 points, max 12.9). Momentum Shift is rebased onto the live pool (RSI Divergence 1.5 + MACD Histogram Slope 1.0): 40% on the 23 days MACD read BUY (1-23 Jun), 0% otherwise. The seed pool still assumes Thermocap, NRPL and Active Addresses had joined (27.0 scored weight), whereas the live board only counted them after their own 90-day history accumulated, so the weight pool steps from 27.0 to 24.0 at 1 Aug.
+
+**Recovered 5-17 Aug.** Early pages had fewer tables: on 5 Aug only the Cycle Bottom table existed (Momentum and Cycle Top are null); on 6 Aug Cycle Bottom and Cycle Top existed (Momentum is null); from 7 Aug all three exist. Momentum scored a pool of 1.0 (MACD only) until RSI Divergence had enough history.
+
+**Reconstructed 1-4 Aug (partial).** LTH-SOPR, aSOPR, Supply-in-Loss and NRPL are not available for these days (no stored values, and the free BGeometrics quota was not spent to fetch them), so the Cycle Bottom is renormalised over the 80% of the pool that could be computed. `lower` and `upper` bound the true value (missing indicators counted as not firing, and as firing). Validated against the 13 recovered live days (5-17 Aug): mean absolute error 7.7 points, max 17.3, point value biased low by about 7 points because LTH-SOPR and aSOPR were firing; the true value is probably in the upper half of the band. 11 of the 13 live values fall inside the band. Indicator-level firing agreed on 128 of 132 comparisons.
+
+**Archive.** The 61 original v1 rows are preserved unchanged in `seed_archive/verdict_seed_v1_2026-11-16.json`. The analysis behind the rebuild (matrices, shifted variants, reconstruction, validation) lives in the git-ignored `backtest_output/`: `trend_history_extended.csv/.json` and `trend_history_diff.csv`.
+
+No scoring, threshold or weight changed; this is stored history only.
